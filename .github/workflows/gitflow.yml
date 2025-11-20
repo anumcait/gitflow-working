@@ -1,20 +1,26 @@
-name: GitFlow Automation (Feature → Dev → Release)
+name: GitFlow Automation
 
 on:
   push:
     branches:
-      - 'feature/**'
+      - 'feature/**'   # Developer pushes to feature
+  pull_request:
+    branches:
+      - dev           # When PR merges to dev → trigger release creation
 
 env:
   PYTHONUNBUFFERED: 1
 
+#####################
+# JOB 1 - PREPARE
+#####################
 jobs:
-
-  # Step 1: Prepare workspace
   prepare:
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/heads/feature/')
     outputs:
       branch_name: ${{ steps.vars.outputs.branch }}
+
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -30,11 +36,14 @@ jobs:
       - name: Install Deps
         run: pip install requests
 
-  # Step 2: Handle Feature Branch → Auto PR → Dev
+#############################
+# JOB 2 – Feature → Dev PR
+#############################
   feature_to_dev:
     needs: prepare
     if: startsWith(needs.prepare.outputs.branch_name, 'feature/')
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -46,7 +55,7 @@ jobs:
       - name: Install Deps
         run: pip install requests
 
-      - name: Auto PR feature → dev
+      - name: Auto-PR feature → dev
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
         run: |
@@ -54,21 +63,54 @@ jobs:
             --action feature_to_develop \
             --branch "${GITHUB_REF#refs/heads/}"
 
-  # Step 3: After dev gets updated → Create Release Branch
-  create_release_from_dev:
-    needs: feature_to_dev
+#####################################################
+# JOB 3 – Create Release Branch after Dev is updated
+#####################################################
+  create_release:
     runs-on: ubuntu-latest
-    if: success()  # Only after feature PR is created & dev updated
+    needs: feature_to_dev
+
+    # Trigger ONLY when PR merges to dev
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'dev'
 
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
+      - name: Set release version
+        id: setver
+        run: echo "VERSION=release/$(date +'%Y.%m.%d_%H%M')" >> $GITHUB_OUTPUT
+
       - name: Create Release Branch
         run: |
-          VERSION="release/$(date +'%Y.%m.%d_%H%M')"
+          VERSION="${{ steps.setver.outputs.VERSION }}"
           echo "Creating release branch: $VERSION"
-          git checkout develop
+          git fetch
+          git checkout dev
           git pull
           git checkout -b "$VERSION"
           git push origin "$VERSION"
+
+#################################################
+# JOB 4 – Auto-PR release → main
+#################################################
+  pr_release_to_main:
+    runs-on: ubuntu-latest
+    needs: create_release
+
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Auto PR release → main
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+          RELEASE_BRANCH: ${{ steps.setver.outputs.VERSION }}
+        run: |
+          python3 scripts/auto_merge.py \
+            --action release_to_main \
+            --branch "${RELEASE_BRANCH}"
