@@ -68,7 +68,7 @@ jobs:
         run: |
           VERSION="release/$(date +'%Y.%m.%d_%H%M')"
           echo "Creating release branch: $VERSION"
-          git checkout dev
+          git checkout develop
           git pull
           git checkout -b "$VERSION"
           git push origin "$VERSION"
