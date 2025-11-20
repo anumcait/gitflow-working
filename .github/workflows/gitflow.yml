@@ -1,122 +1,74 @@
-name: GitFlow Automation
+name: GitFlow Automation (Feature → Dev → Release)
 
 on:
   push:
     branches:
       - 'feature/**'
-      - 'hotfix/**'
-      - 'release/**'
-  workflow_dispatch:
-  # release tag trigger (vX.Y.Z)
-  release:
-    types: [published]
 
 env:
-  PREPROD_HOLD_HOURS: 0.01 # demo: 36 seconds. Set to '24' for 24 hours in prod
   PYTHONUNBUFFERED: 1
 
 jobs:
+
+  # Step 1: Prepare workspace
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      repo: ${{ steps.repo.outputs.repo }}
+      branch_name: ${{ steps.vars.outputs.branch }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Set Vars
+        id: vars
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+        with: { python-version: '3.11' }
 
-      - name: Install deps
+      - name: Install Deps
         run: pip install requests
 
-      - name: Determine branch
-        id: repo
-        run: |
-          echo "repo=${GITHUB_REPOSITORY}" >> $GITHUB_OUTPUT
-          echo "ref=${GITHUB_REF}" >> $GITHUB_OUTPUT
-
-  handle_feature:
+  # Step 2: Handle Feature Branch → Auto PR → Dev
+  feature_to_dev:
     needs: prepare
-    if: startsWith(github.ref, 'refs/heads/feature/')
+    if: startsWith(needs.prepare.outputs.branch_name, 'feature/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with: {python-version: '3.11'}
-      - name: Install deps
-        run: pip install requests
-      - name: Auto PR feature -> develop
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          python3 scripts/auto_merge.py --action feature_to_develop --branch "${GITHUB_REF#refs/heads/}"
+        with: { fetch-depth: 0 }
 
-  handle_hotfix:
-    needs: prepare
-    if: startsWith(github.ref, 'refs/heads/hotfix/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
       - name: Setup Python
         uses: actions/setup-python@v4
-        with: {python-version: '3.11'}
-      - name: Install deps
+        with: { python-version: '3.11' }
+
+      - name: Install Deps
         run: pip install requests
-      - name: Auto PR hotfix -> main & develop
+
+      - name: Auto PR feature → dev
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 scripts/auto_merge.py --action hotfix_to_main_and_dev --branch "${GITHUB_REF#refs/heads/}"
+          python3 scripts/auto_merge.py \
+            --action feature_to_develop \
+            --branch "${GITHUB_REF#refs/heads/}"
 
-  handle_release:
-    needs: prepare
-    if: startsWith(github.ref, 'refs/heads/release/')
+  # Step 3: After dev gets updated → Create Release Branch
+  create_release_from_dev:
+    needs: feature_to_dev
     runs-on: ubuntu-latest
+    if: success()  # Only after feature PR is created & dev updated
+
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with: {python-version: '3.11'}
-      - name: Install deps
-        run: pip install requests
-      - name: Deploy to PREPROD (simulate) and hold
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREPROD_HOLD_HOURS: ${{ env.PREPROD_HOLD_HOURS }}
-        run: |
-          echo "Pretend deploy to preprod for branch ${GITHUB_REF#refs/heads/}"
-          python3 scripts/auto_merge_github.py --action promote_release --branch "${GITHUB_REF#refs/heads/}" --hold-hours ${PREPROD_HOLD_HOURS}
-          # The script will create PR to main (and tag if set via --tag-version)
+        with: { fetch-depth: 0 }
 
-  handle_tag_release:
-    needs: prepare
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with: {python-version: '3.11'}
-      - name: Install deps
-        run: pip install requests
-      - name: Create release branch from develop (optional)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Create Release Branch
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo "Tag push detected: $TAG"
-          # Optionally create release branch from develop when tag is pushed:
-          python3 scripts/create_release_github.py --source develop --version "$TAG"
+          VERSION="release/$(date +'%Y.%m.%d_%H%M')"
+          echo "Creating release branch: $VERSION"
+          git checkout dev
+          git pull
+          git checkout -b "$VERSION"
+          git push origin "$VERSION"
