@@ -6,7 +6,7 @@ on:
       - 'feature/**'   # Developer pushes to feature
   pull_request:
     branches:
-      - dev           # When PR merges to dev → trigger release creation
+      - develop           # When PR merges to dev → trigger release creation
 
 env:
   PYTHONUNBUFFERED: 1
