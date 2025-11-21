@@ -1,13 +1,12 @@
-name: GitFlow Pipeline
+name: GitFlow Automation
 
 on:
   push:
     branches:
-      - "feature/*"
-      - "release/*"
-      - "hotfix/*"
+      - "feature/**"
       - "develop"
-      - "preprod"
+      - "release/**"
+      - "hotfix/**"
 
 permissions:
   contents: write
@@ -15,93 +14,71 @@ permissions:
 
 jobs:
 
-  # ------------------------------------------------------
-  # 1) FEATURE BRANCH
-  # ------------------------------------------------------
-  feature:
-    if: startsWith(github.ref, 'refs/heads/feature/')
+  # STEP 1 — WHEN DEVELOPER PUSHES TO DEVELOP → CREATE RELEASE BRANCH
+  create_release:
+    if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Tests
-        run: echo "Running feature branch tests"
+      - name: Create release branch
+        run: |
+          REL="release-$(date +'%Y%m%d%H%M')"
+          echo "RELEASE=$REL" >> $GITHUB_ENV
+          git checkout -b $REL
+          git push origin $REL
 
-      - name: Create PR → develop
-        uses: repo-sync/pull-request@v2
+      - name: Create Pull Request (Release → preprod)
+        uses: peter-evans/create-pull-request@v5
         with:
-          destination_branch: "develop"
-          pr_title: "Feature → Develop"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Release Pipeline"
+          body: "Auto-generated release branch from develop"
+          base: preprod
+          branch: ${{ env.RELEASE }}
 
-  # ------------------------------------------------------
-  # 2) RELEASE BRANCH
-  # ------------------------------------------------------
-  release:
+  # STEP 2 — WHEN RELEASE BRANCH MERGED INTO PREPROD → WAIT TIMER
+  wait_preprod:
     if: startsWith(github.ref, 'refs/heads/release/')
+    needs: create_release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Hold for QA time (2 hours)
+        run: sleep $((2 * 60 * 60))
 
-      - name: Build Release
-        run: echo "Building release"
-
-      - name: Create PR → preprod
-        uses: repo-sync/pull-request@v2
-        with:
-          destination_branch: "preprod"
-          pr_title: "Release → Preprod"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 3) PRE-PROD APPROVAL HOLD
-  # ------------------------------------------------------
-  preprod:
-    if: github.ref == 'refs/heads/preprod'
+  # STEP 3 — AFTER QA → AUTOMATIC PR TO MAIN
+  promote_to_main:
+    needs: wait_preprod
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Pre-Prod Tests
-        run: echo "Testing preprod"
-
-      - name: Manual Approval
-        uses: trstringer/manual-approval@v1
+      - name: Create PR to MAIN
+        uses: peter-evans/create-pull-request@v5
         with:
-          approvers: "YOUR_GITHUB_USERNAME"
-          minimum-approvals: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Promote Release to MAIN"
+          body: "Preprod QA completed, moving to production"
+          base: main
+          branch: ${{ github.ref_name }}  # current release branch
 
-      - name: Install GitHub CLI
-        run: |
-          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
-
-      - name: Merge Preprod → main
-        run: |
-          gh pr create --title "Preprod → Main" --base main --head preprod --body "Approved release merge"
-          gh pr merge --auto --merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 4) HOTFIX BRANCH
-  # ------------------------------------------------------
-  hotfix:
+  # STEP 4 — HOTFIX FLOW
+  hotfix_flow:
     if: startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Hotfix Tests
-        run: echo "Testing hotfix"
-
-      - name: Create PR → main
-        uses: repo-sync/pull-request@v2
+      - name: Create PR to main
+        uses: peter-evans/create-pull-request@v5
         with:
-          destination_branch: "main"
-          pr_title: "Hotfix → Main"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "HOTFIX → MAIN"
+          base: main
+          branch: ${{ github.ref_name }}
+
+      - name: Create PR to develop
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "HOTFIX → DEVELOP"
+          base: develop
+          branch: ${{ github.ref_name }}
