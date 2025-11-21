@@ -1,101 +1,98 @@
-name: GitFlow Full Demo Pipeline
+name: GitFlow Pipeline
 
 on:
   push:
     branches:
-      - "**"           # run for all branches so nothing is skipped
-  pull_request:
-    branches:
-      - "**"
+      - "feature/*"
+      - "release/*"
+      - "hotfix/*"
+      - "develop"
+      - "preprod"
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
 
-  # ----------------------------------
-  # 1) TEST
-  # ----------------------------------
-  test:
+  # ------------------------------------------------------
+  # 1) FEATURE BRANCH
+  # ------------------------------------------------------
+  feature:
+    if: startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - name: Run Tests
+        run: echo "Running feature branch tests"
 
-      - name: Run unit tests
-        run: echo "Running tests..."
+      - name: Create PR → develop
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "develop"
+          pr_title: "Feature → Develop"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
-  # ----------------------------------
-  # 2) BUILD
-  # ----------------------------------
-  build:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build application
-        run: echo "Building application..."
-
-  # ----------------------------------
-  # 3) INTEGRATE TO DEVELOP
-  # ----------------------------------
-  integrate_dev:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Merge code to develop (demo)
-        run: |
-          echo "Pretending to merge into develop branch..."
-          echo "This is only a demo – actual merge is not performed."
-
-  # ----------------------------------
-  # 4) RELEASE BUILD
-  # ----------------------------------
+  # ------------------------------------------------------
+  # 2) RELEASE BRANCH
+  # ------------------------------------------------------
   release:
+    if: startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
-    needs: integrate_dev
     steps:
-      - name: Create release bundle
-        run: echo "Preparing release build..."
+      - uses: actions/checkout@v4
 
-  # ----------------------------------
-  # 5) PRE-PROD DEPLOY
-  # ----------------------------------
+      - name: Build Release
+        run: echo "Building release"
+
+      - name: Create Pull Request → preprod
+        uses: repo-sync/pull-request@v2
+        with:
+          pr_title: "Release → Preprod"
+          destination_branch: "preprod"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------
+  # 3) PRE-PROD APPROVAL HOLD
+  # ------------------------------------------------------
   preprod:
+    if: github.ref == 'refs/heads/preprod'
     runs-on: ubuntu-latest
-    needs: release
     steps:
-      - name: Deploying to pre-production
-        run: echo "Deploying to PREPROD environment..."
+      - uses: actions/checkout@v4
 
-  # ----------------------------------
-  # 6) PRE-PROD APPROVAL STEP
-  # ----------------------------------
-  hold:
-    runs-on: ubuntu-latest
-    needs: preprod
-    steps:
-      - name: Approval waiting simulation
+      - name: Run Pre-Prod Tests
+        run: echo "Testing preprod"
+
+      - name: Manual Approval
+        uses: trstringer/manual-approval@v1
+        with:
+          approvers: "yourgithubid"
+          minimum-approvals: 1
+
+      - name: Merge Preprod → main
         run: |
-          echo "Pretending to wait for approval..."
-          sleep 10
-          echo "Approval granted!"
+          gh pr create --title "Preprod → Main" --base main --head preprod --body "Approved release merge"
+          gh pr merge --auto --merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ----------------------------------
-  # 7) PRODUCTION DEPLOY
-  # ----------------------------------
-  production:
-    runs-on: ubuntu-latest
-    needs: hold
-    steps:
-      - name: Deploying to PRODUCTION
-        run: echo "Deploying to PRODUCTION environment..."
-
-  # ----------------------------------
-  # 8) HOTFIX PIPELINE
-  # ----------------------------------
+  # ------------------------------------------------------
+  # 4) HOTFIX BRANCH
+  # ------------------------------------------------------
   hotfix:
+    if: startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
-    needs: production
     steps:
-      - name: Hotfix simulation
-        run: echo "Running hotfix pipeline..."
+      - uses: actions/checkout@v4
+
+      - name: Run Hotfix Tests
+        run: echo "Testing hotfix"
+
+      - name: Create PR → main
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "main"
+          pr_title: "Hotfix → Main"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
