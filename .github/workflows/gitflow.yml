@@ -1,12 +1,9 @@
-name: GitFlow Demo Pipeline
+name: GitFlow Pipeline Demo
 
 on:
   push:
     branches:
-      - "**"   # run pipeline for all branches
-
-env:
-  PREPROD_HOLD_HOURS: "24"
+      - "**"
 
 jobs:
 
@@ -26,92 +23,95 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt || true
 
+      - name: Fix PYTHONPATH so app/ is detected
+        run: echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+
       - name: Run tests
-        run: |
-          echo "Running tests..."
-          pytest -q
-    if: always()
+        run: pytest -q
 
   # ------------------------------------------------
   # 2) BUILD
   # ------------------------------------------------
   build:
-    runs-on: ubuntu-latest
     needs: test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
-      - name: Build Application
-        run: |
-          echo "Building application..."
-          python build.py || echo "No build script found"
+      - name: Build step
+        run: echo "Building application... (demo)"
 
   # ------------------------------------------------
   # 3) FEATURE → DEVELOP
   # ------------------------------------------------
   feature_to_develop:
-    runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
     steps:
-      - name: Merge feature to develop
-        run: echo "Merging feature branch → develop"
+      - uses: actions/checkout@v3
+      - name: Merge feature → develop
+        run: echo "Would merge FEATURE → DEVELOP here (demo only)"
 
   # ------------------------------------------------
   # 4) HOTFIX → MAIN & DEVELOP
   # ------------------------------------------------
   hotfix_to_main_and_develop:
-    runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/heads/hotfix/')
+    runs-on: ubuntu-latest
     steps:
-      - name: Merge hotfix to main & develop
-        run: echo "Merging hotfix branch → main & develop"
+      - uses: actions/checkout@v3
+      - name: Merge hotfix → main & develop
+        run: echo "Would merge HOTFIX → MAIN & DEVELOP here (demo only)"
 
   # ------------------------------------------------
-  # 5) RELEASE CREATION
+  # 5) RELEASE CREATION (FROM DEVELOP)
   # ------------------------------------------------
   create_release:
-    runs-on: ubuntu-latest
-    needs: build
+    needs: [build]
     if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
     steps:
-      - name: Create Release
-        run: echo "Creating a release from develop..."
+      - uses: actions/checkout@v3
+      - name: Create Release Branch
+        run: echo "Creating release from develop... (demo)"
 
   # ------------------------------------------------
-  # 6) PREPROD DEPLOYMENT
+  # 6) PREPROD DEPLOYMENT (simulate hold)
   # ------------------------------------------------
-  deploy_preprod:
-    runs-on: ubuntu-latest
+  preprod:
     needs: create_release
     if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    env:
+      PREPROD_HOLD_HOURS: 24
     steps:
-      - name: Deploy to Preprod
+      - uses: actions/checkout@v3
+      - name: Pre-prod Deployment
         run: |
           echo "Deploying to PRE-PROD..."
-          echo "Holding for $PREPROD_HOLD_HOURS hours before promotion..."
+          echo "Hold for $PREPROD_HOLD_HOURS hours before promotion (simulation)"
 
   # ------------------------------------------------
   # 7) PROMOTE RELEASE → MAIN & DEVELOP
   # ------------------------------------------------
   promote_release:
-    runs-on: ubuntu-latest
-    needs: deploy_preprod
+    needs: preprod
     if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
     steps:
-      - name: Promote Release
-        run: echo "Promoting release branch → main & develop..."
+      - uses: actions/checkout@v3
+      - name: Promote to main & develop
+        run: echo "Promoting RELEASE → MAIN & DEVELOP..."
 
   # ------------------------------------------------
-  # 8) PRODUCTION DEPLOYMENT
+  # 8) DEPLOY TO PRODUCTION
   # ------------------------------------------------
-  deploy_prod:
-    runs-on: ubuntu-latest
+  prod:
     needs: promote_release
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     steps:
-      - name: Deploy to Production
-        run: |
-          echo "Deploying latest release to PRODUCTION..."
-          echo "Deployment completed!"
+      - uses: actions/checkout@v3
+      - name: Production Deployment
+        run: echo "Deploying to PRODUCTION environment..."
