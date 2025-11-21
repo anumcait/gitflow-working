@@ -1,18 +1,80 @@
-name: GitFlow Auto Release
+name: GitFlow Automation
 
 on:
   push:
     branches:
-      - 'feature/**'
+      - develop
+      - feature/*
+      - hotfix/*
+      - release/*
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  feature_to_dev:
-    runs-on: ubuntu-latest
 
+  # ------------------------------------------------
+  # 1) TEST
+  # ------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Tests
+        run: |
+          echo "Running tests on: ${{ github.ref }}"
+          echo "✔ Tests OK (simulated)"
+
+  # ------------------------------------------------
+  # 2) BUILD
+  # ------------------------------------------------
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build App
+        run: |
+          echo "Building for: ${{ github.ref }}"
+          echo "✔ Build complete (simulated)"
+
+  # ------------------------------------------------
+  # 3) AUTO MERGE develop → main
+  # ------------------------------------------------
+  merge_to_main:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+      - name: Merge develop → main
+        run: |
+          echo "➡ Switching to main"
+          git checkout main
+
+          echo "➡ Merging develop into main"
+          git merge -X theirs develop -m "Auto-merge: develop → main"
+
+          echo "➡ Pushing to main"
+          git push origin main
+
+  # ------------------------------------------------
+  # 4) AUTO MERGE feature/* → dev & create release branch
+  # ------------------------------------------------
+  feature_to_dev:
+    if: startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,7 +157,6 @@ jobs:
               headers=headers,
               json={"ref": f"refs/heads/{version}", "sha": sha},
           )
-
           print("Release branch created:", create_branch.text)
 
           # 2️⃣ Create PR Release → Dev
@@ -112,5 +173,4 @@ jobs:
               json=pr_data
           )
           print("Release PR:", pr.text)
-
           EOF
