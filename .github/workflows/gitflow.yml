@@ -1,167 +1,69 @@
-name: GitFlow Pipeline
+name: GitFlow Auto Merge Demo
 
 on:
   push:
     branches:
-      - "feature/*"
-      - "develop"
-      - "release/*"
-      - "preprod"
-      - "hotfix/*"
+      - develop
+      - feature/*
+      - hotfix/*
+      - release/*
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write    # IMPORTANT FOR MERGE
 
 jobs:
 
-  # ------------------------------------------------------
-  # 1) FEATURE BRANCH → DEVELOP
-  # ------------------------------------------------------
-  feature:
-    if: startsWith(github.ref, 'refs/heads/feature/')
+  # ------------------------------------------------
+  # 1) TEST
+  # ------------------------------------------------
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Run Tests
         run: |
-          echo "Running tests..."
-          sleep 2
-          echo "Tests completed"
+          echo "Running tests on: ${{ github.ref }}"
+          echo "✔ Tests OK (simulated)"
+
+  # ------------------------------------------------
+  # 2) BUILD
+  # ------------------------------------------------
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Build App
         run: |
-          echo "Building application..."
-          sleep 2
-          echo "Build complete"
+          echo "Building for: ${{ github.ref }}"
+          echo "✔ Build complete (simulated)"
 
-      - name: Create PR → develop
-        run: |
-          gh pr create \
-            --title "Feature → Develop" \
-            --body "Automated PR from feature branch" \
-            --base develop \
-            --head "${GITHUB_REF#refs/heads/}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 2) DEVELOP → RELEASE (Auto create release branch)
-  # ------------------------------------------------------
-  develop:
+  # ------------------------------------------------
+  # 3) AUTO MERGE develop → main
+  # ------------------------------------------------
+  merge_to_main:
+    needs: build
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Run Tests
-        run: echo "Running develop tests..."
-
-      - name: Build
-        run: echo "Building develop branch..."
-
-      - name: Create Release Branch
-        run: |
-          RELEASE="release-$(date +'%Y%m%d-%H%M')"
-          git checkout -b "$RELEASE"
-          git push origin "$RELEASE"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create PR develop → release
-        run: |
-          LATEST=$(git branch -r | grep "release-" | tail -1 | sed 's|origin/||')
-          gh pr create \
-            --title "Develop → $LATEST" \
-            --body "Release preparation" \
-            --base "$LATEST" \
-            --head develop
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-  # ------------------------------------------------------
-  # 3) RELEASE BRANCH → PREPROD
-  # ------------------------------------------------------
-  release:
-    if: startsWith(github.ref, 'refs/heads/release/')
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Release Tests
-        run: echo "Running release tests..."
-
-      - name: Build Release
-        run: echo "Building release branch..."
-
-      - name: PR → preprod
-        run: |
-          gh pr create \
-            --title "Release → Preprod" \
-            --body "Release candidate moving to preprod" \
-            --base preprod \
-            --head "${GITHUB_REF#refs/heads/}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 4) PREPROD → MAIN (Manual Hold)
-  # ------------------------------------------------------
-  preprod:
-    if: github.ref == 'refs/heads/preprod'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Preprod Tests
-        run: echo "Testing preprod..."
-
-      - name: Manual Approval
-        uses: trstringer/manual-approval@v1
         with:
-          approvers: "your-github-username"
-          minimum-approvals: 1
+          fetch-depth: 0    # IMPORTANT for merging
 
-      - name: Create & Merge PR preprod → main
+      - name: Configure Git
         run: |
-          gh pr create \
-            --title "Preprod → Main" \
-            --body "Approved release moving to production" \
-            --base main \
-            --head preprod
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
-          gh pr merge --merge --auto
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 5) HOTFIX → MAIN
-  # ------------------------------------------------------
-  hotfix:
-    if: startsWith(github.ref, 'refs/heads/hotfix/')
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Hotfix Tests
-        run: echo "Running hotfix tests..."
-
-      - name: Build Hotfix
-        run: echo "Building hotfix..."
-
-      - name: PR → main
+      - name: Merge develop → main
         run: |
-          gh pr create \
-            --title "Hotfix → Main" \
-            --body "Urgent fix" \
-            --base main \
-            --head "${GITHUB_REF#refs/heads/}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "➡ Switching to main"
+          git checkout main
 
+          echo "➡ Merging develop into main"
+          git merge develop --no-ff -m "Auto-merge: develop → main"
+
+          echo "➡ Pushing to main"
+          git push origin main
