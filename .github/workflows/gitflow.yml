@@ -49,7 +49,7 @@ jobs:
           pr_data = {
               "title": f"Auto PR Feature → dev ({branch})",
               "head": branch,
-              "base": "dev",
+              "base": "develop",
               "body": "Automated PR created by GitHub Actions"
           }
 
@@ -141,7 +141,7 @@ jobs:
       - name: Sleep for hold time
         run: |
           echo "Holding in preprod for 1 hour…"
-          sleep 3600     # <-- change to 24h = 86400 seconds
+          sleep 60     # <-- change to 24h = 86400 seconds
 
       - name: Setup Python
         uses: actions/setup-python@v4
