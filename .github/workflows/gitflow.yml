@@ -63,7 +63,7 @@ jobs:
           git checkout main
 
           echo "➡ Merging develop into main"
-          git merge develop --no-ff -m "Auto-merge: develop → main"
+          git merge -X theirs develop -m "Auto-merge: develop → main"
 
           echo "➡ Pushing to main"
           git push origin main
