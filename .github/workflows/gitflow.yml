@@ -159,59 +159,59 @@ jobs:
           python3 <<'EOF'
           import os, requests
 
-token = os.environ["GH_TOKEN"]
-repo  = os.environ["REPO"]
-
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Accept": "application/vnd.github+json"
-}
-
-# 1️⃣ Create PR preprod → main
-pr_data = {
-    "title": "Promote preprod → main",
-    "head": "preprod",
-    "base": "main",
-    "body": "Auto promotion to production"
-}
-
-r = requests.post(
-    f"https://api.github.com/repos/{repo}/pulls",
-    json=pr_data, headers=headers
-)
-
-print("Raw PR response:", r.status_code, r.text)
-
-# Stop if PR creation failed
-if r.status_code >= 300:
-    print("❌ Failed to create PR")
-    raise SystemExit(1)
-
-pr_json = r.json()
-
-if "number" not in pr_json:
-    print("❌ GitHub did NOT return PR number")
-    print("Returned JSON:", pr_json)
-    raise SystemExit(1)
-
-pr_number = pr_json["number"]
-print("✔ Created PR:", pr_number)
-
-# 2️⃣ Approve PR
-approval = requests.post(
-    f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
-    json={"event": "APPROVE"},
-    headers=headers
-)
-
-print("Approval response:", approval.status_code, approval.text)
-
-# 3️⃣ Merge PR
-merge = requests.put(
-    f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
-    json={"merge_method": "merge"},
-    headers=headers
-)
-
-print("Merge response:", merge.status_code, merge.text)
+            token = os.environ["GH_TOKEN"]
+            repo  = os.environ["REPO"]
+            
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json"
+            }
+            
+            # 1️⃣ Create PR preprod → main
+            pr_data = {
+                "title": "Promote preprod → main",
+                "head": "preprod",
+                "base": "main",
+                "body": "Auto promotion to production"
+            }
+            
+            r = requests.post(
+                f"https://api.github.com/repos/{repo}/pulls",
+                json=pr_data, headers=headers
+            )
+            
+            print("Raw PR response:", r.status_code, r.text)
+            
+            # Stop if PR creation failed
+            if r.status_code >= 300:
+                print("❌ Failed to create PR")
+                raise SystemExit(1)
+            
+            pr_json = r.json()
+            
+            if "number" not in pr_json:
+                print("❌ GitHub did NOT return PR number")
+                print("Returned JSON:", pr_json)
+                raise SystemExit(1)
+            
+            pr_number = pr_json["number"]
+            print("✔ Created PR:", pr_number)
+            
+            # 2️⃣ Approve PR
+            approval = requests.post(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
+                json={"event": "APPROVE"},
+                headers=headers
+            )
+            
+            print("Approval response:", approval.status_code, approval.text)
+            
+            # 3️⃣ Merge PR
+            merge = requests.put(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
+                json={"merge_method": "merge"},
+                headers=headers
+            )
+            
+            print("Merge response:", merge.status_code, merge.text)
 
