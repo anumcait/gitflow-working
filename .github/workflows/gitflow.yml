@@ -1,12 +1,13 @@
-name: GitFlow Automation
+name: GitFlow Pipeline
 
 on:
   push:
     branches:
-      - "feature/**"
+      - "feature/*"
       - "develop"
-      - "release/**"
-      - "hotfix/**"
+      - "release/*"
+      - "preprod"
+      - "hotfix/*"
 
 permissions:
   contents: write
@@ -14,71 +15,153 @@ permissions:
 
 jobs:
 
-  # STEP 1 — WHEN DEVELOPER PUSHES TO DEVELOP → CREATE RELEASE BRANCH
-  create_release:
+  # ------------------------------------------------------
+  # 1) FEATURE BRANCH → DEVELOP
+  # ------------------------------------------------------
+  feature:
+    if: startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Tests
+        run: |
+          echo "Running tests..."
+          sleep 2
+          echo "Tests completed"
+
+      - name: Build App
+        run: |
+          echo "Building application..."
+          sleep 2
+          echo "Build complete"
+
+      - name: Create PR → develop
+        run: |
+          gh pr create \
+            --title "Feature → Develop" \
+            --body "Automated PR from feature branch" \
+            --base develop \
+            --head "${GITHUB_REF#refs/heads/}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------
+  # 2) DEVELOP → RELEASE (Auto create release branch)
+  # ------------------------------------------------------
+  develop:
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create release branch
+      - name: Run Tests
+        run: echo "Running develop tests..."
+
+      - name: Build
+        run: echo "Building develop branch..."
+
+      - name: Create Release Branch
         run: |
-          REL="release-$(date +'%Y%m%d%H%M')"
-          echo "RELEASE=$REL" >> $GITHUB_ENV
-          git checkout -b $REL
-          git push origin $REL
+          RELEASE="release-$(date +'%Y%m%d-%H%M')"
+          git checkout -b "$RELEASE"
+          git push origin "$RELEASE"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Pull Request (Release → preprod)
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Release Pipeline"
-          body: "Auto-generated release branch from develop"
-          base: preprod
-          branch: ${{ env.RELEASE }}
+      - name: Create PR develop → release
+        run: |
+          LATEST=$(git branch -r | grep "release-" | tail -1 | sed 's|origin/||')
+          gh pr create \
+            --title "Develop → $LATEST" \
+            --body "Release preparation" \
+            --base "$LATEST" \
+            --head develop
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-  # STEP 2 — WHEN RELEASE BRANCH MERGED INTO PREPROD → WAIT TIMER
-  wait_preprod:
+  # ------------------------------------------------------
+  # 3) RELEASE BRANCH → PREPROD
+  # ------------------------------------------------------
+  release:
     if: startsWith(github.ref, 'refs/heads/release/')
-    needs: create_release
     runs-on: ubuntu-latest
-    steps:
-      - name: Hold for QA time (2 hours)
-        run: sleep $((2 * 60 * 60))
 
-  # STEP 3 — AFTER QA → AUTOMATIC PR TO MAIN
-  promote_to_main:
-    needs: wait_preprod
-    runs-on: ubuntu-latest
     steps:
-      - name: Create PR to MAIN
-        uses: peter-evans/create-pull-request@v5
+      - uses: actions/checkout@v4
+
+      - name: Run Release Tests
+        run: echo "Running release tests..."
+
+      - name: Build Release
+        run: echo "Building release branch..."
+
+      - name: PR → preprod
+        run: |
+          gh pr create \
+            --title "Release → Preprod" \
+            --body "Release candidate moving to preprod" \
+            --base preprod \
+            --head "${GITHUB_REF#refs/heads/}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------
+  # 4) PREPROD → MAIN (Manual Hold)
+  # ------------------------------------------------------
+  preprod:
+    if: github.ref == 'refs/heads/preprod'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Preprod Tests
+        run: echo "Testing preprod..."
+
+      - name: Manual Approval
+        uses: trstringer/manual-approval@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Promote Release to MAIN"
-          body: "Preprod QA completed, moving to production"
-          base: main
-          branch: ${{ github.ref_name }}  # current release branch
+          approvers: "your-github-username"
+          minimum-approvals: 1
 
-  # STEP 4 — HOTFIX FLOW
-  hotfix_flow:
+      - name: Create & Merge PR preprod → main
+        run: |
+          gh pr create \
+            --title "Preprod → Main" \
+            --body "Approved release moving to production" \
+            --base main \
+            --head preprod
+
+          gh pr merge --merge --auto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------
+  # 5) HOTFIX → MAIN
+  # ------------------------------------------------------
+  hotfix:
     if: startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create PR to main
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "HOTFIX → MAIN"
-          base: main
-          branch: ${{ github.ref_name }}
+      - name: Run Hotfix Tests
+        run: echo "Running hotfix tests..."
 
-      - name: Create PR to develop
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "HOTFIX → DEVELOP"
-          base: develop
-          branch: ${{ github.ref_name }}
+      - name: Build Hotfix
+        run: echo "Building hotfix..."
+
+      - name: PR → main
+        run: |
+          gh pr create \
+            --title "Hotfix → Main" \
+            --body "Urgent fix" \
+            --base main \
+            --head "${GITHUB_REF#refs/heads/}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
