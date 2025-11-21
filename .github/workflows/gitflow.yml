@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Run Tests
         run: echo "Running feature branch tests"
 
@@ -46,11 +46,11 @@ jobs:
       - name: Build Release
         run: echo "Building release"
 
-      - name: Create Pull Request → preprod
+      - name: Create PR → preprod
         uses: repo-sync/pull-request@v2
         with:
-          pr_title: "Release → Preprod"
           destination_branch: "preprod"
+          pr_title: "Release → Preprod"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   # ------------------------------------------------------
@@ -68,8 +68,17 @@ jobs:
       - name: Manual Approval
         uses: trstringer/manual-approval@v1
         with:
-          approvers: "yourgithubid"
+          approvers: "YOUR_GITHUB_USERNAME"
           minimum-approvals: 1
+
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
 
       - name: Merge Preprod → main
         run: |
