@@ -1,146 +1,69 @@
-name: GitFlow Pipeline
+name: GitFlow Auto Merge Demo
 
 on:
   push:
     branches:
-      - "feature/**"
-      - "develop"
-      - "release/**"
-      - "preprod"
-      - "hotfix/**"
+      - develop
+      - feature/*
+      - hotfix/*
+      - release/*
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write    # IMPORTANT FOR MERGE
 
 jobs:
 
-  # ------------------------------------------------------
-  # 1) FEATURE → DEVELOP
-  # ------------------------------------------------------
-  feature:
-    if: startsWith(github.ref, 'refs/heads/feature/')
+  # ------------------------------------------------
+  # 1) TEST
+  # ------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Tests
+        run: |
+          echo "Running tests on: ${{ github.ref }}"
+          echo "✔ Tests OK (simulated)"
+
+  # ------------------------------------------------
+  # 2) BUILD
+  # ------------------------------------------------
+  build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: pip install -r requirements.txt || echo "No requirements"
-
-      - name: Run Tests
-        run: echo "Running feature branch tests..." && pytest || echo "pytest not available"
-
       - name: Build App
-        run: echo "Simulating build for feature branch..."
+        run: |
+          echo "Building for: ${{ github.ref }}"
+          echo "✔ Build complete (simulated)"
 
-      - name: Create Pull Request → Develop
-        uses: peter-evans/create-pull-request@v5
-        with:
-          title: "Feature → Develop"
-          branch: ${{ github.ref_name }}
-          base: develop
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 2) DEVELOP → CREATE RELEASE BRANCH
-  # ------------------------------------------------------
-  release:
+  # ------------------------------------------------
+  # 3) AUTO MERGE develop → main
+  # ------------------------------------------------
+  merge_to_main:
+    needs: build
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # IMPORTANT for merging
 
-      - name: Run Tests (DEVELOP)
-        run: echo "Testing develop..." && pytest || echo "pytest not available"
-
-      - name: Build
-        run: echo "Building develop branch..."
-
-      - name: Create Release Branch
+      - name: Configure Git
         run: |
-          REL="release-$(date +'%Y%m%d%H%M')"
-          echo "RELEASE=$REL" >> $GITHUB_ENV
-          git checkout -b $REL
-          git push origin $REL
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
-      - name: Create PR to PREPROD
-        uses: peter-evans/create-pull-request@v5
-        with:
-          title: "Release → PreProd"
-          base: preprod
-          branch: ${{ env.RELEASE }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge develop → main
+        run: |
+          echo "➡ Switching to main"
+          git checkout main
 
-  # ------------------------------------------------------
-  # 3) PREPROD TESTING + APPROVAL
-  # ------------------------------------------------------
-  preprod:
-    if: github.ref == 'refs/heads/preprod'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          echo "➡ Merging develop into main"
+          git merge -X theirs develop -m "Auto-merge: develop → main"
 
-      - name: Install Dependencies
-        run: pip install -r requirements.txt || echo "No requirements"
-
-      - name: Test (PREPROD)
-        run: echo "Testing preprod..." && pytest || echo "pytest not available"
-
-      - name: Build
-        run: echo "Building preprod branch..."
-
-      - name: Manual Approval
-        uses: trstringer/manual-approval@v1
-        with:
-          approvers: "yourgithubusername"
-          minimum-approvals: 1
-
-  # ------------------------------------------------------
-  # 4) PREPROD → MAIN
-  # ------------------------------------------------------
-  promote_main:
-    needs: preprod
-    if: github.ref == 'refs/heads/preprod'
-    runs-on: ubuntu-latest
-    steps:
-      - name: PR → main
-        uses: peter-evans/create-pull-request@v5
-        with:
-          title: "Promote PreProd → MAIN"
-          base: main
-          branch: preprod
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ------------------------------------------------------
-  # 5) HOTFIX → MAIN + DEVELOP
-  # ------------------------------------------------------
-  hotfix:
-    if: startsWith(github.ref, 'refs/heads/hotfix/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt || echo "No requirements"
-
-      - name: Run Hotfix Tests
-        run: echo "Testing hotfix..." && pytest || echo "pytest not available"
-
-      - name: Build
-        run: echo "Building hotfix branch..."
-
-      - name: PR → MAIN
-        uses: peter-evans/create-pull-request@v5
-        with:
-          title: "Hotfix → MAIN"
-          base: main
-          branch: ${{ github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: PR → DEVELOP
-        uses: peter-evans/create-pull-request@v5
-        with:
-          title: "Hotfix → DEVELOP"
-          base: develop
-          branch: ${{ github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          echo "➡ Pushing to main"
+          git push origin main
