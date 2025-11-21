@@ -1,117 +1,101 @@
-name: GitFlow Pipeline Demo
+name: GitFlow Full Demo Pipeline
 
 on:
   push:
+    branches:
+      - "**"           # run for all branches so nothing is skipped
+  pull_request:
     branches:
       - "**"
 
 jobs:
 
-  # ------------------------------------------------
+  # ----------------------------------
   # 1) TEST
-  # ------------------------------------------------
+  # ----------------------------------
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+      - name: Run unit tests
+        run: echo "Running tests..."
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt || true
-
-      - name: Fix PYTHONPATH so app/ is detected
-        run: echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-
-      - name: Run tests
-        run: pytest -q
-
-  # ------------------------------------------------
+  # ----------------------------------
   # 2) BUILD
-  # ------------------------------------------------
+  # ----------------------------------
   build:
+    runs-on: ubuntu-latest
     needs: test
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Build step
-        run: echo "Building application... (demo)"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  # ------------------------------------------------
-  # 3) FEATURE → DEVELOP
-  # ------------------------------------------------
-  feature_to_develop:
+      - name: Build application
+        run: echo "Building application..."
+
+  # ----------------------------------
+  # 3) INTEGRATE TO DEVELOP
+  # ----------------------------------
+  integrate_dev:
+    runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/heads/feature/')
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Merge feature → develop
-        run: echo "Would merge FEATURE → DEVELOP here (demo only)"
-
-  # ------------------------------------------------
-  # 4) HOTFIX → MAIN & DEVELOP
-  # ------------------------------------------------
-  hotfix_to_main_and_develop:
-    needs: build
-    if: startsWith(github.ref, 'refs/heads/hotfix/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Merge hotfix → main & develop
-        run: echo "Would merge HOTFIX → MAIN & DEVELOP here (demo only)"
-
-  # ------------------------------------------------
-  # 5) RELEASE CREATION (FROM DEVELOP)
-  # ------------------------------------------------
-  create_release:
-    needs: [build]
-    if: github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Create Release Branch
-        run: echo "Creating release from develop... (demo)"
-
-  # ------------------------------------------------
-  # 6) PREPROD DEPLOYMENT (simulate hold)
-  # ------------------------------------------------
-  preprod:
-    needs: create_release
-    if: startsWith(github.ref, 'refs/heads/release/')
-    runs-on: ubuntu-latest
-    env:
-      PREPROD_HOLD_HOURS: 24
-    steps:
-      - uses: actions/checkout@v3
-      - name: Pre-prod Deployment
+      - name: Merge code to develop (demo)
         run: |
-          echo "Deploying to PRE-PROD..."
-          echo "Hold for $PREPROD_HOLD_HOURS hours before promotion (simulation)"
+          echo "Pretending to merge into develop branch..."
+          echo "This is only a demo – actual merge is not performed."
 
-  # ------------------------------------------------
-  # 7) PROMOTE RELEASE → MAIN & DEVELOP
-  # ------------------------------------------------
-  promote_release:
+  # ----------------------------------
+  # 4) RELEASE BUILD
+  # ----------------------------------
+  release:
+    runs-on: ubuntu-latest
+    needs: integrate_dev
+    steps:
+      - name: Create release bundle
+        run: echo "Preparing release build..."
+
+  # ----------------------------------
+  # 5) PRE-PROD DEPLOY
+  # ----------------------------------
+  preprod:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Deploying to pre-production
+        run: echo "Deploying to PREPROD environment..."
+
+  # ----------------------------------
+  # 6) PRE-PROD APPROVAL STEP
+  # ----------------------------------
+  hold:
+    runs-on: ubuntu-latest
     needs: preprod
-    if: startsWith(github.ref, 'refs/heads/release/')
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Promote to main & develop
-        run: echo "Promoting RELEASE → MAIN & DEVELOP..."
+      - name: Approval waiting simulation
+        run: |
+          echo "Pretending to wait for approval..."
+          sleep 10
+          echo "Approval granted!"
 
-  # ------------------------------------------------
-  # 8) DEPLOY TO PRODUCTION
-  # ------------------------------------------------
-  prod:
-    needs: promote_release
-    if: github.ref == 'refs/heads/main'
+  # ----------------------------------
+  # 7) PRODUCTION DEPLOY
+  # ----------------------------------
+  production:
     runs-on: ubuntu-latest
+    needs: hold
     steps:
-      - uses: actions/checkout@v3
-      - name: Production Deployment
+      - name: Deploying to PRODUCTION
         run: echo "Deploying to PRODUCTION environment..."
+
+  # ----------------------------------
+  # 8) HOTFIX PIPELINE
+  # ----------------------------------
+  hotfix:
+    runs-on: ubuntu-latest
+    needs: production
+    steps:
+      - name: Hotfix simulation
+        run: echo "Running hotfix pipeline..."
