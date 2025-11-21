@@ -1,116 +1,98 @@
-name: GitFlow Automation
+name: GitFlow Pipeline
 
 on:
   push:
     branches:
-      - 'feature/**'   # Developer pushes to feature
-  pull_request:
-    branches:
-      - develop           # When PR merges to dev → trigger release creation
+      - "feature/*"
+      - "release/*"
+      - "hotfix/*"
+      - "develop"
+      - "preprod"
 
-env:
-  PYTHONUNBUFFERED: 1
+permissions:
+  contents: write
+  pull-requests: write
 
-#####################
-# JOB 1 - PREPARE
-#####################
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
+
+  # ------------------------------------------------------
+  # 1) FEATURE BRANCH
+  # ------------------------------------------------------
+  feature:
     if: startsWith(github.ref, 'refs/heads/feature/')
-    outputs:
-      branch_name: ${{ steps.vars.outputs.branch }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - name: Set Vars
-        id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with: { python-version: '3.11' }
-
-      - name: Install Deps
-        run: pip install requests
-
-#############################
-# JOB 2 – Feature → Dev PR
-#############################
-  feature_to_dev:
-    needs: prepare
-    if: startsWith(needs.prepare.outputs.branch_name, 'feature/')
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      
+      - name: Run Tests
+        run: echo "Running feature branch tests"
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with: { python-version: '3.11' }
+      - name: Create PR → develop
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "develop"
+          pr_title: "Feature → Develop"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Deps
-        run: pip install requests
+  # ------------------------------------------------------
+  # 2) RELEASE BRANCH
+  # ------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Auto-PR feature → dev
+      - name: Build Release
+        run: echo "Building release"
+
+      - name: Create Pull Request → preprod
+        uses: repo-sync/pull-request@v2
+        with:
+          pr_title: "Release → Preprod"
+          destination_branch: "preprod"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------
+  # 3) PRE-PROD APPROVAL HOLD
+  # ------------------------------------------------------
+  preprod:
+    if: github.ref == 'refs/heads/preprod'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Pre-Prod Tests
+        run: echo "Testing preprod"
+
+      - name: Manual Approval
+        uses: trstringer/manual-approval@v1
+        with:
+          approvers: "yourgithubid"
+          minimum-approvals: 1
+
+      - name: Merge Preprod → main
+        run: |
+          gh pr create --title "Preprod → Main" --base main --head preprod --body "Approved release merge"
+          gh pr merge --auto --merge
         env:
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-        run: |
-          python3 scripts/auto_merge.py \
-            --action feature_to_develop \
-            --branch "${GITHUB_REF#refs/heads/}"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-#####################################################
-# JOB 3 – Create Release Branch after Dev is updated
-#####################################################
-  create_release:
+  # ------------------------------------------------------
+  # 4) HOTFIX BRANCH
+  # ------------------------------------------------------
+  hotfix:
+    if: startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
-    needs: feature_to_dev
-
-    # Trigger ONLY when PR merges to dev
-    if: |
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'dev'
-
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
 
-      - name: Set release version
-        id: setver
-        run: echo "VERSION=release/$(date +'%Y.%m.%d_%H%M')" >> $GITHUB_OUTPUT
+      - name: Run Hotfix Tests
+        run: echo "Testing hotfix"
 
-      - name: Create Release Branch
-        run: |
-          VERSION="${{ steps.setver.outputs.VERSION }}"
-          echo "Creating release branch: $VERSION"
-          git fetch
-          git checkout dev
-          git pull
-          git checkout -b "$VERSION"
-          git push origin "$VERSION"
-
-#################################################
-# JOB 4 – Auto-PR release → main
-#################################################
-  pr_release_to_main:
-    runs-on: ubuntu-latest
-    needs: create_release
-
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      - name: Auto PR release → main
-        env:
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-          RELEASE_BRANCH: ${{ steps.setver.outputs.VERSION }}
-        run: |
-          python3 scripts/auto_merge.py \
-            --action release_to_main \
-            --branch "${RELEASE_BRANCH}"
+      - name: Create PR → main
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "main"
+          pr_title: "Hotfix → Main"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
