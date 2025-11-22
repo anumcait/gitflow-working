@@ -3,24 +3,22 @@ name: GitFlow Automation (Feature → Develop)
 on:
   push:
     branches:
-      - "feature/*"        # Runs only on push to feature branches, NOT on branch creation
+      - "feature/*"
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}    # For PR CREATE + MERGE
+  GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
 
 jobs:
 
   create_pr:
     name: Create & Merge PR → develop
     runs-on: ubuntu-latest
-
     outputs:
       pr_number: ${{ steps.pr.outputs.number }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -36,65 +34,42 @@ jobs:
             || echo "PR_EXISTS")
 
           if [[ "$PR" == "PR_EXISTS" ]]; then
-            # Fetch existing PR number
             PR=$(gh pr list --head "$GITHUB_REF_NAME" --json number -q ".[0].number")
           fi
 
           echo "number=${PR##*/}" >> $GITHUB_OUTPUT
 
-      # -----------------------
-      # FIXED AND WORKING PART
-      # -----------------------
-      - name: Auto Approve PR (GitHub Actions bot)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}     # IMPORTANT!!!
-        run: |
-          echo "Approving PR ${{ steps.pr.outputs.number }} using GitHub Actions bot"
-          gh pr review ${{ steps.pr.outputs.number }} --approve --repo $GITHUB_REPOSITORY
-
       - name: Auto Merge PR
         run: |
-          gh pr merge ${{ steps.pr.outputs.number }} --merge --delete-branch --repo $GITHUB_REPOSITORY
+          gh pr merge ${{ steps.pr.outputs.number }} --merge --delete-branch
 
-  # -------------------------------------
-  # PYTHON TEST STAGE (AFTER MERGE)
-  # -------------------------------------
   tests:
-  name: Run Python Tests
-  runs-on: ubuntu-latest
-  needs: create_pr
+    name: Run Python Tests
+    runs-on: ubuntu-latest
+    needs: create_pr
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
 
-  steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: develop
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
+      - name: Install deps
+        run: pip install -r requirements.txt
 
-    - name: Install deps
-      run: |
-        pip install -r requirements.txt
+      - name: Fix Python Path
+        run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
 
-    - name: Fix Python Path
-      run: |
-        echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
+      - name: Run tests
+        run: pytest
 
-    - name: Run tests
-      run: |
-        pytest
-
-
-  # -------------------------------------
-  # PYTHON BUILD STAGE
-  # -------------------------------------
   build:
     name: Build Python App
     runs-on: ubuntu-latest
     needs: tests
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,12 +81,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: |
-          pip install build
+        run: pip install build
 
       - name: Build wheel and sdist
-        run: |
-          python -m build
+        run: python -m build
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v3
@@ -119,18 +92,13 @@ jobs:
           name: python-build
           path: dist/*
 
-  # -------------------------------------
-  # FINAL STAGE
-  # -------------------------------------
   ready_for_release:
     name: Ready for Release Stage
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Summary
         run: |
-          echo "✨ Feature merged → develop"
-          echo "✔ Tests passed"
-          echo "✔ Build generated"
-          echo "🚀 Ready for release"
+          echo "Feature merged → develop"
+          echo "Tests passed"
+          echo "Build generated"
