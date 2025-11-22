@@ -16,9 +16,9 @@ env:
 jobs:
 
   # ---------------------------
-  # 1️⃣ Create Pull Request
+  # 1️⃣ Create & Merge Pull Request
   # ---------------------------
-  create_pr:
+  create_and_merge_pr:
     runs-on: ubuntu-latest
     if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
     outputs:
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all branches
+          fetch-depth: 0
 
       - name: Extract branch name
         id: vars
@@ -46,7 +46,7 @@ jobs:
             https://api.github.com/repos/${{ github.repository }}/pulls \
             -d "{\"title\": \"Auto PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
 
-          # Check for duplicate PR
+          # Handle duplicate PR
           if echo "$result" | grep -q "A pull request already exists"; then
             PR=$(curl -s -H "Authorization: token $TOKEN" \
               -H "Accept: application/vnd.github+json" \
@@ -59,34 +59,31 @@ jobs:
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
           echo "Created PR #$PR"
 
-  # ---------------------------
-  # 2️⃣ Merge PR
-  # ---------------------------
       - name: Merge PR
         run: |
-          PR="${{ needs.create_pr.outputs.pr_number }}"
+          PR="${{ steps.create.outputs.pr_number }}"
           echo "Merging PR #$PR into $BASE_BRANCH"
-      
+
           merge_result=$(curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
             -d '{"merge_method":"squash"}')
-      
+
           echo "$merge_result"
-      
+
           if echo "$merge_result" | grep -q '"merged": true'; then
             echo "✔ PR merged successfully!"
           else
-            echo "❌ Merge failed, please check conflicts or approvals"
+            echo "❌ Merge failed. Check conflicts or approvals."
             exit 1
 
   # ---------------------------
-  # 3️⃣ Run Tests
+  # 2️⃣ Run Tests
   # ---------------------------
   run_tests:
     runs-on: ubuntu-latest
-    needs: merge_pr
+    needs: create_and_merge_pr
 
     steps:
       - name: Checkout develop
@@ -107,7 +104,7 @@ jobs:
         run: pytest || exit 1
 
   # ---------------------------
-  # 4️⃣ Build Python Package
+  # 3️⃣ Build Python Package
   # ---------------------------
   build:
     runs-on: ubuntu-latest
