@@ -15,12 +15,11 @@ env:
 
 jobs:
 
-  # ---------------------------
-  # 1️⃣ Create Pull Request
-  # ---------------------------
-  create_pr:
+  # -------------------------------------------------
+  # 1️⃣ CREATE & MERGE PR
+  # -------------------------------------------------
+  create_and_merge_pr:
     runs-on: ubuntu-latest
-    if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
     outputs:
       pr_number: ${{ steps.create.outputs.pr_number }}
 
@@ -28,17 +27,23 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all branches
+          fetch-depth: 0
+
+      - name: Set Git Identity
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
 
       - name: Extract branch name
         id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        run: |
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
       - name: Create PR
         id: create
         run: |
           BRANCH="${{ steps.vars.outputs.branch }}"
-          echo "Creating PR: $BRANCH → $BASE_BRANCH"
+          echo "Creating PR from $BRANCH → $BASE_BRANCH"
 
           result=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
@@ -46,11 +51,11 @@ jobs:
             https://api.github.com/repos/${{ github.repository }}/pulls \
             -d "{\"title\": \"Auto PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
 
-          # Check for duplicate PR
+          # Detect duplicate PR
           if echo "$result" | grep -q "A pull request already exists"; then
             PR=$(curl -s -H "Authorization: token $TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH \
+              "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH" \
               | jq -r '.[0].number')
           else
             PR=$(echo "$result" | jq -r '.number')
@@ -59,49 +64,35 @@ jobs:
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
           echo "Created PR #$PR"
 
-  # ---------------------------
-  # 2️⃣ Merge PR
-  # ---------------------------
-  merge_pr:
-    runs-on: ubuntu-latest
-    needs: create_pr
-    if: ${{ needs.create_pr.outputs.pr_number != 'null' }}
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Fetch develop
-        run: git fetch origin $BASE_BRANCH:$BASE_BRANCH
-
       - name: Merge PR
         run: |
-          PR="${{ needs.create_pr.outputs.pr_number }}"
-          echo "Merging PR #$PR into $BASE_BRANCH"
+          PR="${{ steps.create.outputs.pr_number }}"
+          echo "Merging PR #$PR into develop"
 
-          # Attempt merge
           merge_result=$(curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
             -d '{"merge_method":"squash"}')
 
           echo "$merge_result"
 
-          if echo "$merge_result" | grep -q '"merged": true'; then
+          merged=$(echo "$merge_result" | jq -r '.merged')
+
+          if [ "$merged" = "true" ]; then
             echo "✔ PR merged successfully!"
           else
-            echo "❌ Merge failed, please check conflicts or approvals"
+            echo "❌ Merge failed!"
             exit 1
+          fi
 
-  # ---------------------------
-  # 3️⃣ Run Tests
-  # ---------------------------
+
+  # -------------------------------------------------
+  # 2️⃣ RUN TESTS
+  # -------------------------------------------------
   run_tests:
     runs-on: ubuntu-latest
-    needs: merge_pr
+    needs: create_and_merge_pr
 
     steps:
       - name: Checkout develop
@@ -121,9 +112,10 @@ jobs:
       - name: Run pytest
         run: pytest || exit 1
 
-  # ---------------------------
-  # 4️⃣ Build Python Package
-  # ---------------------------
+
+  # -------------------------------------------------
+  # 3️⃣ BUILD PYTHON PACKAGE
+  # -------------------------------------------------
   build:
     runs-on: ubuntu-latest
     needs: run_tests
@@ -146,7 +138,7 @@ jobs:
       - name: Build wheel and sdist
         run: python -m build
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v3
         with:
           name: python-build
