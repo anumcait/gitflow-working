@@ -1,0 +1,92 @@
+name: Merge PR + Test + Build
+
+on:
+  repository_dispatch:
+    types: [merge_pr]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+
+jobs:
+
+  merge_pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract PR number
+        run: |
+          echo "PR=${{ github.event.client_payload.pr }}" >> $GITHUB_ENV
+          echo "Merging PR #${{ github.event.client_payload.pr }}"
+
+      - name: Wait until PR is mergeable
+        run: |
+          for i in {1..40}; do
+            GET=$(curl -s -H "Authorization: token $TOKEN" \
+              https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR)
+
+            MERGEABLE=$(echo "$GET" | jq -r '.mergeable')
+            STATE=$(echo "$GET" | jq -r '.mergeable_state')
+
+            echo "mergeable=$MERGEABLE state=$STATE"
+
+            if [[ "$MERGEABLE" == "true" ]]; then
+              echo "Ready to merge!"
+              break
+            fi
+
+            echo "⏳ Waiting..."
+            sleep 5
+          done
+
+          if [[ "$MERGEABLE" != "true" ]]; then
+            echo "❌ Still not mergeable"
+            exit 1
+          fi
+
+      - name: Merge
+        run: |
+          curl -s -X PUT \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR/merge \
+            -d '{"merge_method":"merge"}'
+
+  run_tests:
+    runs-on: ubuntu-latest
+    needs: merge_pr
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest
+
+  build:
+    runs-on: ubuntu-latest
+    needs: run_tests
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Build package
+        run: |
+          pip install build
+          python -m build
