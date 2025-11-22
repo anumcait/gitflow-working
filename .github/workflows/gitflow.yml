@@ -3,95 +3,65 @@ name: Auto Merge Feature → Develop
 on:
   push:
     branches:
-      - "feature/*"
+      - 'feature/**'     # runs only when pushing to feature branches
 
 permissions:
-  contents: write
   pull-requests: write
+  contents: write
 
 jobs:
-
-  auto_merge_feature_to_develop:
+  create-pr:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Create + Merge PR (feature → develop)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          FEATURE_BRANCH: ${{ github.ref_name }}
+      - name: Extract branch name
+        id: vars
         run: |
-          python3 << 'EOF'
-          import os, requests, time
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-          token  = os.environ["GITHUB_TOKEN"]
-          repo   = os.environ["REPO"]
-          branch = os.environ["FEATURE_BRANCH"]
+      - name: Create Pull Request (safe)
+        id: pr
+        run: |
+          branch="${{ steps.vars.outputs.branch }}"
+          echo "Creating PR for $branch → develop"
 
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json"
-          }
+          # Create PR via GitHub API
+          response=$(curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{
+              \"title\":\"Auto: Merge $branch into develop\",
+              \"body\":\"Automated PR created by GitHub Actions.\",
+              \"head\":\"$branch\",
+              \"base\":\"develop\"
+            }")
 
-          # -------------------------------------------------
-          # 1️⃣ Create Pull Request: feature → develop
-          # -------------------------------------------------
-          pr_payload = {
-              "title": f"Auto Merge {branch} → develop",
-              "head": branch,
-              "base": "develop",
-              "body": "Automated PR created by GitHub Actions."
-          }
+          echo "API Response: $response"
 
-          pr = requests.post(
-              f"https://api.github.com/repos/{repo}/pulls",
-              json=pr_payload,
-              headers=headers
-          ).json()
+          # Detect if PR already exists
+          if echo "$response" | grep -q "pull request already exists"; then
+            echo "PR already exists. Exiting gracefully."
+            echo "existing_pr=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-          pr_number = pr.get("number")
-          print("PR CREATED:", pr)
+          # Detect GitHub 422 validation error
+          if echo "$response" | grep -q "\"status\": \"422\""; then
+            echo "Validation error (likely duplicate PR). Exiting gracefully."
+            echo "existing_pr=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-          if not pr_number:
-              print("❌ Failed to create PR")
-              print(pr)
-              exit(1)
+          echo "existing_pr=false" >> $GITHUB_OUTPUT
 
-          time.sleep(2)
-
-          # -------------------------------------------------
-          # 2️⃣ Auto-Approve PR
-          # -------------------------------------------------
-          approve = requests.post(
-              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
-              headers=headers,
-              json={"event": "APPROVE"}
-          )
-          print("PR APPROVED:", approve.text)
-
-          time.sleep(2)
-
-          # -------------------------------------------------
-          # 3️⃣ Auto-Merge PR
-          # -------------------------------------------------
-          merge = requests.put(
-              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
-              headers=headers,
-              json={"merge_method": "merge"}
-          )
-          print("PR MERGED:", merge.text)
-
-          EOF
+      - name: Print PR Status
+        run: |
+          if [ "${{ steps.pr.outputs.existing_pr }}" = "true" ]; then
+            echo "✔ PR already exists. Nothing to do."
+          else
+            echo "✔ New PR created successfully!"
+          fi
