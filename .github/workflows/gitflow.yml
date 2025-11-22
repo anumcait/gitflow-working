@@ -95,6 +95,10 @@ jobs:
     needs: create_and_merge_pr
 
     steps:
+      - name: Run pytest
+        run: |
+          export PYTHONPATH="$PWD"
+          pytest || exit 1
       - name: Checkout develop
         uses: actions/checkout@v4
         with:
