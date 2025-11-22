@@ -17,7 +17,7 @@ jobs:
   create_pr:
     runs-on: ubuntu-latest
     outputs:
-      pr_number: ${{ steps.create.outputs.number }}
+      pr_number: ${{ steps.create.outputs.pr }}
 
     steps:
       - uses: actions/checkout@v4
@@ -30,41 +30,48 @@ jobs:
         id: create
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          branch="${{ steps.vars.outputs.branch }}"
+          BRANCH="${{ steps.vars.outputs.branch }}"
 
-          echo "Creating PR: $branch → $BASE_BRANCH"
+          echo "Creating PR: $BRANCH → $BASE_BRANCH"
 
           result=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls \
-            -d "{\"title\": \"PR: $branch → $BASE_BRANCH\", \"head\": \"$branch\", \"base\": \"$BASE_BRANCH\"}")
+            -d "{\"title\": \"PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
 
           echo "$result"
-          pr=$(echo "$result" | jq -r '.number')
 
-          echo "number=$pr" >> $GITHUB_OUTPUT
+          PR=$(echo "$result" | jq -r '.number')
+          echo "pr=$PR" >> $GITHUB_OUTPUT
 
-  auto_merge:
-    runs-on: ubuntu-latest
+  approve_and_merge:
     needs: create_pr
+    runs-on: ubuntu-latest
 
     steps:
+      - name: Approve PR
+        run: |
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
+
+          echo "Auto-approving PR #$PR"
+
+          curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews" \
+            -d '{"event":"APPROVE"}'
+
       - name: Merge PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
 
-          echo "Approving PR #$PR"
-          curl -s -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews \
-            -d '{"event": "APPROVE"}'
+          echo "Auto-merging PR #$PR"
 
-          echo "Merging PR #$PR → develop"
           curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
-            -d '{"merge_method": "squash"}'
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
+            -d '{"merge_method":"squash"}'
