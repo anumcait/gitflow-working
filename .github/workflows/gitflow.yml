@@ -1,4 +1,5 @@
-name: Auto PR + Auto Merge
+
+name: Auto Merge Feature → Develop
 
 on:
   push:
