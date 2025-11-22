@@ -1,4 +1,4 @@
-name: Auto PR + Merge + Test + Build
+name: Auto Create PR
 
 on:
   push:
@@ -6,34 +6,27 @@ on:
       - "feature/**"
 
 permissions:
-  contents: write
   pull-requests: write
+  contents: write
 
 env:
-  BASE_BRANCH: develop
   TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+  BASE_BRANCH: develop
 
 jobs:
-
-  # -------------------------------------------------
-  # 1️⃣ CREATE PR + AUTO MERGE
-  # -------------------------------------------------
-  create_and_merge_pr:
+  create_pr:
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.create.outputs.pr_number }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Extract branch name
         id: vars
         run: |
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
       - name: Create PR
         id: create
@@ -42,130 +35,22 @@ jobs:
           BASE="${{ env.BASE_BRANCH }}"
           TOKEN="${{ env.TOKEN }}"
 
-          echo "📌 Creating PR: $BRANCH → $BASE"
+          echo "Creating PR from $BRANCH → $BASE"
 
-          # Attempt to create PR
           RESULT=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls \
-            -d "{\"title\":\"Auto PR: $BRANCH → $BASE\",\"head\":\"$BRANCH\",\"base\":\"$BASE\"}")
+            -d "{\"title\": \"Auto PR: $BRANCH → $BASE\", \"head\": \"$BRANCH\", \"base\": \"$BASE\"}")
 
-          # If PR already exists
-          if echo "$RESULT" | grep -q "A pull request already exists"; then
-            PR=$(curl -s -H "Authorization: token $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE" \
-              | jq -r '.[0].number')
-          else
-            PR=$(echo "$RESULT" | jq -r '.number')
-          fi
-
+          PR=$(echo "$RESULT" | jq -r '.number')
           echo "pr_number=$PR" >> $GITHUB_OUTPUT
-          echo "✅ PR #$PR created or already existed."
+          echo "PR #$PR created"
 
-      - name: Auto-merge PR
+      - name: Trigger merge workflow
         run: |
-          PR="${{ steps.create.outputs.pr_number }}"
-          TOKEN="${{ env.TOKEN }}"
-
-          echo "🚀 Attempting to auto-merge PR #$PR"
-
-          # Retry 40 times × 5 sec = 200 seconds
-          for i in {1..40}; do
-            echo "🔍 Checking mergeability ($i/40)..."
-
-            GET=$(curl -s -H "Authorization: token $TOKEN" \
-              https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR)
-
-            MERGEABLE=$(echo "$GET" | jq -r '.mergeable')
-            STATE=$(echo "$GET" | jq -r '.mergeable_state')
-
-            echo "mergeable=$MERGEABLE | state=$STATE"
-
-            if [[ "$MERGEABLE" == "true" ]] && [[ "$STATE" == "clean" || "$STATE" == "unstable" ]]; then
-              echo "✅ PR is mergeable!"
-              break
-            fi
-
-            echo "⏳ Waiting 5 seconds..."
-            sleep 5
-          done
-
-          if [[ "$MERGEABLE" != "true" ]]; then
-            echo "❌ GitHub never marked PR as mergeable. Failing."
-            exit 1
-          fi
-
-          echo "🔨 Merging now..."
-
-          MERGE=$(curl -s -X PUT \
+          curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR/merge \
-            -d '{"merge_method":"merge"}')
-
-          echo "$MERGE"
-
-          if echo "$MERGE" | grep -q "Pull Request successfully merged"; then
-            echo "🎉 Merge successful!"
-          else
-            echo "❌ Merge failed!"
-            exit 1
-          fi
-
-
-  # -------------------------------------------------
-  # 2️⃣ RUN TESTS AFTER MERGE
-  # -------------------------------------------------
-  run_tests:
-    runs-on: ubuntu-latest
-    needs: create_and_merge_pr
-
-    steps:
-      - name: Checkout develop
-        uses: actions/checkout@v4
-        with:
-          ref: develop
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run pytest
-        run: pytest || exit 1
-
-
-  # -------------------------------------------------
-  # 3️⃣ BUILD PACKAGE
-  # -------------------------------------------------
-  build:
-    runs-on: ubuntu-latest
-    needs: run_tests
-
-    steps:
-      - name: Checkout develop
-        uses: actions/checkout@v4
-        with:
-          ref: develop
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install build tools
-        run: pip install build
-
-      - name: Build wheel and sdist
-        run: python -m build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: python-build
-          path: dist/*
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d "{\"event_type\": \"merge_pr\", \"client_payload\": {\"pr\": \"${{ steps.create.outputs.pr_number }}\"}}"
