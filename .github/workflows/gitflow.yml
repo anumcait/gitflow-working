@@ -1,97 +1,150 @@
+
 name: Auto Merge Feature → Develop
 
 on:
   push:
     branches:
-      - "feature/*"
+      - "feature/**"
 
 permissions:
   contents: write
   pull-requests: write
 
+env:
+  BASE_BRANCH: develop
+
 jobs:
 
-  auto_merge_feature_to_develop:
+  create_pr:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.setpr.outputs.pr }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract branch name
+        id: vars
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+
+      - name: Create or Detect PR
+        id: setpr
+        run: |
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          BRANCH="${{ steps.vars.outputs.branch }}"
+          REPO="${{ github.repository }}"
+
+          echo "Trying to create PR for $BRANCH → $BASE_BRANCH"
+
+          # Try PR creation
+          create=$(curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/$REPO/pulls \
+            -d "{\"title\": \"PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
+
+          echo "Create response: $create"
+
+          # If PR created successfully
+          number=$(echo "$create" | jq -r '.number')
+
+          if [ "$number" != "null" ]; then
+            echo "PR created: $number"
+            echo "pr=$number" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "PR creation failed. Checking if PR already exists..."
+
+          # Find existing PR
+          existing=$(curl -s \
+            -H "Authorization: token $TOKEN" \
+            "https://api.github.com/repos/$REPO/pulls?head=${{ github.repository_owner }}:$BRANCH&state=open")
+
+          echo "Existing search: $existing"
+
+          number=$(echo "$existing" | jq -r '.[0].number')
+
+          if [ "$number" = "null" ]; then
+            echo "❌ No PR exists for branch $BRANCH"
+            exit 1
+          fi
+
+          echo "Found existing PR: $number"
+          echo "pr=$number" >> $GITHUB_OUTPUT
+
+  approve_and_merge:
+    needs: create_pr
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Create + Merge PR (feature → develop)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          FEATURE_BRANCH: ${{ github.ref_name }}
+      - name: Approve PR
         run: |
-          python3 << 'EOF'
-          import os, requests, time
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
+          REPO="${{ github.repository }}"
 
-          token  = os.environ["GITHUB_TOKEN"]
-          repo   = os.environ["REPO"]
-          branch = os.environ["FEATURE_BRANCH"]
+          echo "Auto-approving PR #$PR"
 
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json"
-          }
+          curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/pulls/$PR/reviews" \
+            -d '{"event":"APPROVE"}'
 
-          # -------------------------------------------------
-          # 1️⃣ Create Pull Request: feature → develop
-          # -------------------------------------------------
-          pr_payload = {
-              "title": f"Auto Merge {branch} → develop",
-              "head": branch,
-              "base": "develop",
-              "body": "Automated PR created by GitHub Actions."
-          }
+          - name: Update feature branch with latest develop
+                  run: |
+                    TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+                    PR="${{ needs.create_pr.outputs.pr_number }}"
+                    REPO="${{ github.repository }}"
+          
+                    echo "Updating feature branch for PR #$PR..."
+          
+                    head_branch=$(curl -s \
+                      -H "Authorization: token $TOKEN" \
+                      https://api.github.com/repos/$REPO/pulls/$PR \
+                      | jq -r '.head.ref')
+          
+                    echo "Feature branch is $head_branch"
+          
+                    curl -s -X POST \
+                      -H "Authorization: token $TOKEN" \
+                      -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/$REPO/merges" \
+                      -d "{\"base\":\"$head_branch\", \"head\":\"develop\"}"
+      - name: Merge PR (retry until mergeable)
+        run: |
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
+          REPO="${{ github.repository }}"
 
-          pr = requests.post(
-              f"https://api.github.com/repos/{repo}/pulls",
-              json=pr_payload,
-              headers=headers
-          ).json()
+          echo "Checking mergeability for PR #$PR..."
 
-          pr_number = pr.get("number")
-          print("PR CREATED:", pr)
+          for i in {1..10}; do
+            status=$(curl -s \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/pulls/$PR" \
+              | jq -r '.mergeable_state')
 
-          if not pr_number:
-              print("❌ Failed to create PR")
-              print(pr)
-              exit(1)
+            echo "Attempt $i: mergeable_state=$status"
 
-          time.sleep(2)
+            if [[ "$status" == "clean" || "$status" == "unstable" ]]; then
+              echo "PR is mergeable. Merging..."
 
-          # -------------------------------------------------
-          # 2️⃣ Auto-Approve PR
-          # -------------------------------------------------
-          approve = requests.post(
-              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
-              headers=headers,
-              json={"event": "APPROVE"}
-          )
-          print("PR APPROVED:", approve.text)
+              merge=$(curl -s -X PUT \
+                -H "Authorization: token $TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
+                -d '{"merge_method":"squash"}')
 
-          time.sleep(2)
+              echo "$merge"
+              exit 0
+            fi
 
-          # -------------------------------------------------
-          # 3️⃣ Auto-Merge PR
-          # -------------------------------------------------
-          merge = requests.put(
-              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
-              headers=headers,
-              json={"merge_method": "merge"}
-          )
-          print("PR MERGED:", merge.text)
+            echo "Not mergeable yet. Waiting 3 seconds..."
+            sleep 3
+          done
 
-          EOF
+          echo "❌ PR never became mergeable."
+          exit 1
