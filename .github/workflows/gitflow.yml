@@ -1,135 +1,147 @@
-name: Auto PR + Merge + Test + Build
+name: GitFlow Automation (Feature → Develop → Release → Main)
 
 on:
   push:
     branches:
-      - "feature/**"
-
-permissions:
-  contents: write
-  pull-requests: write
+      - 'feature/**'  # Developer pushes feature branch
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - develop      # PR merged into develop triggers release creation
 
 env:
-  BASE_BRANCH: develop
-  TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+  PREPROD_HOLD_SECONDS: 60   # Demo: 1 min pre-prod hold. Set to 86400 for 24 hrs in prod
+  PYTHONUNBUFFERED: 1
 
+#############################
+# JOB 1 - Feature → Develop PR
+#############################
 jobs:
-
-  # ---------------------------
-  # 1️⃣ Create & Merge Pull Request
-  # ---------------------------
-  create_and_merge_pr:
+  feature_to_develop:
     runs-on: ubuntu-latest
-    if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
-    outputs:
-      pr_number: ${{ steps.create.outputs.pr_number }}
-
+    if: startsWith(github.ref, 'refs/heads/feature/')
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-      - name: Extract branch name
-        id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-
-      - name: Create PR
-        id: create
-        run: |
-          BRANCH="${{ steps.vars.outputs.branch }}"
-          echo "Creating PR: $BRANCH → $BASE_BRANCH"
-
-          result=$(curl -s -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls \
-            -d "{\"title\": \"Auto PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
-
-          # Handle duplicate PR
-          if echo "$result" | grep -q "A pull request already exists"; then
-            PR=$(curl -s -H "Authorization: token $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH" \
-              | jq -r '.[0].number')
-          else
-            PR=$(echo "$result" | jq -r '.number')
-          fi
-
-          echo "pr_number=$PR" >> $GITHUB_OUTPUT
-          echo "Created PR #$PR"
-
-      - name: Merge PR
-        run: |
-          PR="${{ steps.create.outputs.pr_number }}"
-          echo "Merging PR #$PR into $BASE_BRANCH"
-
-          merge_result=$(curl -s -X PUT \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
-            -d '{"merge_method":"squash"}')
-
-          echo "$merge_result"
-
-          if echo "$merge_result" | grep -q '"merged": true'; then
-            echo "✔ PR merged successfully!"
-          else
-            echo "❌ Merge failed. Check conflicts or approvals."
-            exit 1
-
-  # ---------------------------
-  # 2️⃣ Run Tests
-  # ---------------------------
-  run_tests:
-    runs-on: ubuntu-latest
-    needs: create_and_merge_pr
-
-    steps:
-      - name: Checkout develop
-        uses: actions/checkout@v4
-        with:
-          ref: develop
-          fetch-depth: 0
-
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+        with: { python-version: '3.11' }
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests
 
-      - name: Run pytest
-        run: pytest || exit 1
+      - name: Auto-create PR feature → develop
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          echo "Creating PR from ${BRANCH} → develop"
+          python3 scripts/auto_merge.py --action feature_to_develop --branch "$BRANCH"
 
-  # ---------------------------
-  # 3️⃣ Build Python Package
-  # ---------------------------
-  build:
+#############################
+# JOB 2 - Create Release Branch after PR merged into develop
+#############################
+  create_release_from_develop:
     runs-on: ubuntu-latest
-    needs: run_tests
+    needs: feature_to_develop
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop'
 
     steps:
-      - name: Checkout develop
-        uses: actions/checkout@v4
-        with:
-          ref: develop
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-      - name: Set up Python
+      - name: Set Release Version
+        id: setver
+        run: |
+          VERSION="release/$(date +'%Y.%m.%d_%H%M')"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release Branch
+        run: |
+          VERSION="${{ steps.setver.outputs.VERSION }}"
+          echo "Creating release branch: $VERSION"
+          git fetch origin
+          git checkout develop
+          git pull origin develop
+          git checkout -b "$VERSION"
+          git push origin "$VERSION"
+
+#############################
+# JOB 3 - Auto-create PR Release → Main
+#############################
+  pr_release_to_main:
+    runs-on: ubuntu-latest
+    needs: create_release_from_develop
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
         uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+        with: { python-version: '3.11' }
 
-      - name: Install build tools
-        run: pip install build
+      - name: Install dependencies
+        run: pip install requests
 
-      - name: Build wheel and sdist
-        run: python -m build
+      - name: Auto-create PR release → main
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+          RELEASE_BRANCH: ${{ steps.setver.outputs.VERSION }}
+        run: |
+          echo "Creating PR from $RELEASE_BRANCH → main"
+          python3 scripts/auto_merge.py --action release_to_main --branch "$RELEASE_BRANCH"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: python-build
-          path: dist/*
+#############################
+# JOB 4 - Preprod Hold (demo 1 min)
+#############################
+  preprod_hold:
+    runs-on: ubuntu-latest
+    needs: pr_release_to_main
+    steps:
+      - name: Simulate Preprod Deploy
+        run: |
+          echo "Deploying release branch to PRE-PROD (demo hold ${PREPROD_HOLD_SECONDS} seconds)"
+          sleep $PREPROD_HOLD_SECONDS
+          echo "Preprod hold completed"
+
+#############################
+# JOB 5 - Optional: Tag Main Release
+#############################
+  tag_main_release:
+    runs-on: ubuntu-latest
+    needs: preprod_hold
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Create Tag
+        run: |
+          TAG="v$(date +'%Y.%m.%d_%H%M')"
+          echo "Tagging main: $TAG"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git checkout main
+          git pull origin main
+          git tag "$TAG"
+          git push origin "$TAG"
+
+#############################
+# JOB 6 - Optional: Merge Release back into Develop
+#############################
+  merge_release_back_to_develop:
+    runs-on: ubuntu-latest
+    needs: tag_main_release
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Merge main → develop
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+        run: |
+          python3 scripts/auto_merge.py --action main_to_develop --branch main
