@@ -1,5 +1,4 @@
-
-name: Auto Merge Feature → Develop
+name: Auto PR + Auto Merge
 
 on:
   push:
@@ -10,15 +9,9 @@ permissions:
   contents: write
   pull-requests: write
 
-env:
-  BASE_BRANCH: develop
-
 jobs:
-
-  create_pr:
+  auto_pr_merge:
     runs-on: ubuntu-latest
-    outputs:
-      pr_number: ${{ steps.setpr.outputs.pr }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,124 +20,57 @@ jobs:
         id: vars
         run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create or Detect PR
-        id: setpr
+      - name: Create PR (if not exists)
+        id: create
+        run: |
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          HEAD="${{ steps.vars.outputs.branch }}"
+          BASE="develop"
+
+          echo "Checking if PR already exists..."
+
+          pr=$(curl -s \
+            -H "Authorization: token $TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:${HEAD}&base=$BASE" \
+            | jq -r '.[0].number')
+
+          if [[ "$pr" == "null" ]]; then
+            echo "Creating PR..."
+
+            create=$(curl -s -X POST \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/pulls \
+              -d "{\"title\": \"Auto PR $HEAD → $BASE\", \"head\": \"$HEAD\", \"base\": \"$BASE\"}")
+
+            pr=$(echo "$create" | jq -r '.number')
+          fi
+
+          echo "PR found/created: $pr"
+          echo "pr_number=$pr" >> $GITHUB_OUTPUT
+
+      - name: Merge PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ steps.create.outputs.pr_number }}"
+          REPO="${{ github.repository }}"
+
+          echo "Merging PR #$PR..."
+
+          curl -s -X PUT \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
+            -d '{"merge_method":"squash"}'
+
+      - name: Delete feature branch
+        run: |
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
           BRANCH="${{ steps.vars.outputs.branch }}"
           REPO="${{ github.repository }}"
 
-          echo "Trying to create PR for $BRANCH → $BASE_BRANCH"
+          echo "Deleting branch $BRANCH..."
 
-          # Try PR creation
-          create=$(curl -s -X POST \
+          curl -s -X DELETE \
             -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/$REPO/pulls \
-            -d "{\"title\": \"PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
-
-          echo "Create response: $create"
-
-          # If PR created successfully
-          number=$(echo "$create" | jq -r '.number')
-
-          if [ "$number" != "null" ]; then
-            echo "PR created: $number"
-            echo "pr=$number" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "PR creation failed. Checking if PR already exists..."
-
-          # Find existing PR
-          existing=$(curl -s \
-            -H "Authorization: token $TOKEN" \
-            "https://api.github.com/repos/$REPO/pulls?head=${{ github.repository_owner }}:$BRANCH&state=open")
-
-          echo "Existing search: $existing"
-
-          number=$(echo "$existing" | jq -r '.[0].number')
-
-          if [ "$number" = "null" ]; then
-            echo "❌ No PR exists for branch $BRANCH"
-            exit 1
-          fi
-
-          echo "Found existing PR: $number"
-          echo "pr=$number" >> $GITHUB_OUTPUT
-
-  approve_and_merge:
-    needs: create_pr
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Approve PR
-        run: |
-          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR="${{ needs.create_pr.outputs.pr_number }}"
-          REPO="${{ github.repository }}"
-
-          echo "Auto-approving PR #$PR"
-
-          curl -s -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR/reviews" \
-            -d '{"event":"APPROVE"}'
-
-          - name: Update feature branch with latest develop
-                  run: |
-                    TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-                    PR="${{ needs.create_pr.outputs.pr_number }}"
-                    REPO="${{ github.repository }}"
-          
-                    echo "Updating feature branch for PR #$PR..."
-          
-                    head_branch=$(curl -s \
-                      -H "Authorization: token $TOKEN" \
-                      https://api.github.com/repos/$REPO/pulls/$PR \
-                      | jq -r '.head.ref')
-          
-                    echo "Feature branch is $head_branch"
-          
-                    curl -s -X POST \
-                      -H "Authorization: token $TOKEN" \
-                      -H "Accept: application/vnd.github+json" \
-                      "https://api.github.com/repos/$REPO/merges" \
-                      -d "{\"base\":\"$head_branch\", \"head\":\"develop\"}"
-      - name: Merge PR (retry until mergeable)
-        run: |
-          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR="${{ needs.create_pr.outputs.pr_number }}"
-          REPO="${{ github.repository }}"
-
-          echo "Checking mergeability for PR #$PR..."
-
-          for i in {1..10}; do
-            status=$(curl -s \
-              -H "Authorization: token $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/pulls/$PR" \
-              | jq -r '.mergeable_state')
-
-            echo "Attempt $i: mergeable_state=$status"
-
-            if [[ "$status" == "clean" || "$status" == "unstable" ]]; then
-              echo "PR is mergeable. Merging..."
-
-              merge=$(curl -s -X PUT \
-                -H "Authorization: token $TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
-                -d '{"merge_method":"squash"}')
-
-              echo "$merge"
-              exit 0
-            fi
-
-            echo "Not mergeable yet. Waiting 3 seconds..."
-            sleep 3
-          done
-
-          echo "❌ PR never became mergeable."
-          exit 1
+            "https://api.github.com/repos/$REPO/git/refs/heads/$BRANCH"
