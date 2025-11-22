@@ -1,12 +1,9 @@
-name: GitFlow Automation
+name: Auto Merge Feature → Develop
 
 on:
   push:
     branches:
-      - develop
-      - feature/*
-      - hotfix/*
-      - release/*
+      - "feature/*"
 
 permissions:
   contents: write
@@ -14,67 +11,9 @@ permissions:
 
 jobs:
 
-  # ------------------------------------------------
-  # 1) TEST
-  # ------------------------------------------------
-  test:
+  auto_merge_feature_to_develop:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Run Tests
-        run: |
-          echo "Running tests on: ${{ github.ref }}"
-          echo "✔ Tests OK (simulated)"
 
-  # ------------------------------------------------
-  # 2) BUILD
-  # ------------------------------------------------
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build App
-        run: |
-          echo "Building for: ${{ github.ref }}"
-          echo "✔ Build complete (simulated)"
-
-  # ------------------------------------------------
-  # 3) AUTO MERGE develop → main
-  # ------------------------------------------------
-  merge_to_main:
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-      - name: Merge develop → main
-        run: |
-          echo "➡ Switching to main"
-          git checkout main
-
-          echo "➡ Merging develop into main"
-          git merge -X theirs develop -m "Auto-merge: develop → main"
-
-          echo "➡ Pushing to main"
-          git push origin main
-
-  # ------------------------------------------------
-  # 4) AUTO MERGE feature/* → dev & create release branch
-  # ------------------------------------------------
-  feature_to_dev:
-    if: startsWith(github.ref, 'refs/heads/feature/')
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,26 +25,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Run Tests (Dummy)
-        run: |
-          echo "Running tests..."
-          sleep 3
-          echo "Tests PASSED"
-
-      - name: Auto-merge Feature → Dev
+      - name: Create + Merge PR (feature → develop)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           FEATURE_BRANCH: ${{ github.ref_name }}
         run: |
           python3 << 'EOF'
-          import os, requests
+          import os, requests, time
 
-          token = os.environ["GITHUB_TOKEN"]
-          repo  = os.environ["REPO"]
+          token  = os.environ["GITHUB_TOKEN"]
+          repo   = os.environ["REPO"]
           branch = os.environ["FEATURE_BRANCH"]
 
           headers = {
@@ -113,64 +46,52 @@ jobs:
               "Accept": "application/vnd.github+json"
           }
 
-          # Create PR feature → dev
-          pr_data = {
-              "title": f"Auto Merge Feature {branch} → dev",
+          # -------------------------------------------------
+          # 1️⃣ Create Pull Request: feature → develop
+          # -------------------------------------------------
+          pr_payload = {
+              "title": f"Auto Merge {branch} → develop",
               "head": branch,
-              "base": "dev",
-              "body": "Automated by GitHub Actions."
-          }
-
-          r = requests.post(f"https://api.github.com/repos/{repo}/pulls",
-                            json=pr_data, headers=headers)
-          print("PR Response:", r.text)
-          EOF
-
-      - name: Auto-Create Release Branch & MR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          python3 << 'EOF'
-          import requests, os, datetime
-
-          token = os.environ["GITHUB_TOKEN"]
-          repo = os.environ["REPO"]
-
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json"
-          }
-
-          # release branch version
-          version = datetime.datetime.utcnow().strftime("release-%Y%m%d-%H%M")
-
-          # 1️⃣ Create release branch from latest dev
-          dev_ref = requests.get(
-              f"https://api.github.com/repos/{repo}/git/ref/heads/dev",
-              headers=headers,
-          ).json()
-          sha = dev_ref["object"]["sha"]
-
-          create_branch = requests.post(
-              f"https://api.github.com/repos/{repo}/git/refs",
-              headers=headers,
-              json={"ref": f"refs/heads/{version}", "sha": sha},
-          )
-          print("Release branch created:", create_branch.text)
-
-          # 2️⃣ Create PR Release → Dev
-          pr_data = {
-              "title": f"Release {version} → dev",
-              "head": version,
-              "base": "dev",
-              "body": "Automated release branch creation.",
+              "base": "develop",
+              "body": "Automated PR created by GitHub Actions."
           }
 
           pr = requests.post(
               f"https://api.github.com/repos/{repo}/pulls",
+              json=pr_payload,
+              headers=headers
+          ).json()
+
+          pr_number = pr.get("number")
+          print("PR CREATED:", pr)
+
+          if not pr_number:
+              print("❌ Failed to create PR")
+              print(pr)
+              exit(1)
+
+          time.sleep(2)
+
+          # -------------------------------------------------
+          # 2️⃣ Auto-Approve PR
+          # -------------------------------------------------
+          approve = requests.post(
+              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
               headers=headers,
-              json=pr_data
+              json={"event": "APPROVE"}
           )
-          print("Release PR:", pr.text)
+          print("PR APPROVED:", approve.text)
+
+          time.sleep(2)
+
+          # -------------------------------------------------
+          # 3️⃣ Auto-Merge PR
+          # -------------------------------------------------
+          merge = requests.put(
+              f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
+              headers=headers,
+              json={"merge_method": "merge"}
+          )
+          print("PR MERGED:", merge.text)
+
           EOF
