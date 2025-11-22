@@ -98,7 +98,7 @@ jobs:
       - name: Run pytest
         run: |
           export PYTHONPATH="$PWD"
-          pytest || exit 1
+          python3 -m pytest || exit 1
       - name: Checkout develop
         uses: actions/checkout@v4
         with:
