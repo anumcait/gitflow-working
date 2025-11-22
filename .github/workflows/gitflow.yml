@@ -39,106 +39,105 @@ jobs:
         run: |
           echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-    jobs:
-        create_pr:
-          runs-on: ubuntu-latest
-      
-          # ⭐ REQUIRED so other jobs can read the PR number
-          outputs:
-            pr_number: ${{ steps.create.outputs.pr_number }}
-      
-          steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
-              with:
-                fetch-depth: 0
-      
-            - name: Extract branch name
-              id: vars
-              run: |
-                BRANCH="${GITHUB_REF#refs/heads/}"
-                echo "branch=$BRANCH" >> $GITHUB_OUTPUT
-      
-            - name: Create PR
-              id: create
-              run: |
-                BRANCH="${{ steps.vars.outputs.branch }}"
-                BASE_BRANCH="${{ env.BASE_BRANCH }}"
-                TOKEN="${{ env.TOKEN }}"
-      
-                echo "Creating PR from $BRANCH → $BASE_BRANCH"
-      
-                # Create PR
-                result=$(curl -s -X POST \
-                  -H "Authorization: token $TOKEN" \
-                  -H "Accept: application/vnd.github+json" \
-                  https://api.github.com/repos/${{ github.repository }}/pulls \
-                  -d "{\"title\": \"Auto PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
-      
-                # Detect duplicate PR scenario
-                if echo "$result" | grep -q "A pull request already exists"; then
-                  PR=$(curl -s -H "Authorization: token $TOKEN" \
-                    -H "Accept: application/vnd.github+json" \
-                    "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH" \
-                    | jq -r '.[0].number')
-                else
-                  PR=$(echo "$result" | jq -r '.number')
-                fi
-      
-                echo "Created PR #$PR"
-      
-                # ⭐ Send PR number to workflow output
-                echo "pr_number=$PR" >> $GITHUB_OUTPUT
-
-      - name: Auto-merge PR
-        run: |
-          PR="${{ steps.extract_pr.outputs.pr_number }}"
-
-          echo "Merging PR #$PR into develop"
-
-          # Retry until GitHub reports mergeable == true
-          for i in {1..10}; do
-            echo "🔍 Checking mergeability attempt $i/10..."
-
-            GET=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR)
-
-            MERGEABLE=$(echo "$GET" | jq -r '.mergeable')
-            STATE=$(echo "$GET" | jq -r '.mergeable_state')
-
-            echo "mergeable: $MERGEABLE | state: $STATE"
-
-            if [[ "$MERGEABLE" == "true" ]]; then
-              echo "✅ Mergeable — merging now..."
-              break
+    create_pr:
+      runs-on: ubuntu-latest
+  
+      # ⭐ REQUIRED so other jobs can read the PR number
+      outputs:
+        pr_number: ${{ steps.create.outputs.pr_number }}
+  
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
+  
+        - name: Extract branch name
+          id: vars
+          run: |
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+  
+        - name: Create PR
+          id: create
+          run: |
+            BRANCH="${{ steps.vars.outputs.branch }}"
+            BASE_BRANCH="${{ env.BASE_BRANCH }}"
+            TOKEN="${{ env.TOKEN }}"
+  
+            echo "Creating PR from $BRANCH → $BASE_BRANCH"
+  
+            # Create PR
+            result=$(curl -s -X POST \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/pulls \
+              -d "{\"title\": \"Auto PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
+  
+            # Detect duplicate PR scenario
+            if echo "$result" | grep -q "A pull request already exists"; then
+              PR=$(curl -s -H "Authorization: token $TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH" \
+                | jq -r '.[0].number')
+            else
+              PR=$(echo "$result" | jq -r '.number')
             fi
+  
+            echo "Created PR #$PR"
+  
+            # ⭐ Send PR number to workflow output
+            echo "pr_number=$PR" >> $GITHUB_OUTPUT
 
-            echo "⏳ Not mergeable yet, waiting 5 seconds..."
-            sleep 5
-          done
-
-          if [[ "$MERGEABLE" != "true" ]]; then
-            echo "❌ PR still not mergeable. Aborting."
-            exit 1
-          fi
-
-          # Try merge now
-          MERGE=$(curl -s -X PUT \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR/merge \
-            -d '{"merge_method":"merge"}')
-
-          echo "$MERGE"
-
-          MSG=$(echo "$MERGE" | jq -r '.message // empty')
-
-          if [[ "$MSG" == "Pull Request successfully merged" ]]; then
-            echo "🎉 Auto-merge successful!"
-          else
-            echo "❌ Merge failed!"
-            exit 1
-          fi
+        - name: Auto-merge PR
+          run: |
+            PR="${{ steps.extract_pr.outputs.pr_number }}"
+  
+            echo "Merging PR #$PR into develop"
+  
+            # Retry until GitHub reports mergeable == true
+            for i in {1..10}; do
+              echo "🔍 Checking mergeability attempt $i/10..."
+  
+              GET=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+                https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR)
+  
+              MERGEABLE=$(echo "$GET" | jq -r '.mergeable')
+              STATE=$(echo "$GET" | jq -r '.mergeable_state')
+  
+              echo "mergeable: $MERGEABLE | state: $STATE"
+  
+              if [[ "$MERGEABLE" == "true" ]]; then
+                echo "✅ Mergeable — merging now..."
+                break
+              fi
+  
+              echo "⏳ Not mergeable yet, waiting 5 seconds..."
+              sleep 5
+            done
+  
+            if [[ "$MERGEABLE" != "true" ]]; then
+              echo "❌ PR still not mergeable. Aborting."
+              exit 1
+            fi
+  
+            # Try merge now
+            MERGE=$(curl -s -X PUT \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR/merge \
+              -d '{"merge_method":"merge"}')
+  
+            echo "$MERGE"
+  
+            MSG=$(echo "$MERGE" | jq -r '.message // empty')
+  
+            if [[ "$MSG" == "Pull Request successfully merged" ]]; then
+              echo "🎉 Auto-merge successful!"
+            else
+              echo "❌ Merge failed!"
+              exit 1
+            fi
 
 
   # -------------------------------------------------
