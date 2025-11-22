@@ -3,82 +3,139 @@ name: Auto PR + Auto Merge (Feature → Develop)
 on:
   push:
     branches:
-      - "feature/**"     # Trigger only on feature branches
+      - 'feature/**'     # Auto-create PR on feature pushes
+
+  pull_request:
+    types: [review_requested, submitted, edited, reopened, ready_for_review, synchronize]
+    branches:
+      - develop           # Auto-merge PRs targeting develop
 
 permissions:
-  contents: write
   pull-requests: write
+  contents: write
 
 jobs:
 
-  # ============================================================
-  # 1️⃣ CREATE PR FROM feature/* → develop
-  # ============================================================
-  create_pr:
+  # ----------------------------------------------------------
+  # 1️⃣ CREATE PR WHEN FEATURE BRANCH IS PUSHED
+  # ----------------------------------------------------------
+  create-pr:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
-    outputs:
-      pr_number: ${{ steps.get_pr.outputs.number }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Extract branch
+      - name: Extract branch name
         id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        run: |
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
-        id: create
+      - name: Create PR safely
+        id: pr
         run: |
           branch="${{ steps.vars.outputs.branch }}"
+          echo "Creating PR: $branch → develop"
 
           response=$(curl -s -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls \
             -d "{
-              \"title\": \"Auto: Merge $branch → develop\",
-              \"body\": \"Automated PR created by GitHub Actions\",
-              \"head\": \"$branch\",
-              \"base\": \"develop\"
+              \"title\":\"Auto: Merge $branch into develop\",
+              \"body\":\"Automated PR from GitHub Actions.\",
+              \"head\":\"$branch\",
+              \"base\":\"develop\"
             }")
 
-          echo "$response" > response.json
+          echo "API Response:"
+          echo "$response"
 
-      - name: Extract PR number (new or existing)
-        id: get_pr
-        run: |
-          # 1. If new PR created → take `.number`
-          num=$(jq -r '.number // empty' response.json)
-
-          # 2. If PR already exists → search PR by branch head
-          if [ -z "$num" ]; then
-            num=$(curl -s \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              https://api.github.com/repos/${{ github.repository }}/pulls \
-              | jq -r ".[] | select(.head.ref==\"${{ steps.vars.outputs.branch }}\") | .number")
+          # Detect duplicate PR (string)
+          if echo "$response" | grep -q "pull request already exists"; then
+            echo "existing_pr=true" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-          echo "PR found: $num"
-          echo "number=$num" >> $GITHUB_OUTPUT
+          # Detect GitHub validation error (422)
+          if echo "$response" | grep -q "\"status\": \"422\""; then
+            echo "existing_pr=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
+          # Validate JSON
+          echo "$response" | jq empty 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "existing_pr=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-  # ============================================================
-  # 2️⃣ AUTO-MERGE THE PR WHEN APPROVED
-  # ============================================================
-  auto_merge:
-    needs: create_pr
+          # Extract PR number
+          pr_number=$(echo "$response" | jq -r '.number')
+          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+          echo "existing_pr=false" >> $GITHUB_OUTPUT
+
+      - name: Output PR result
+        run: |
+          if [ "${{ steps.pr.outputs.existing_pr }}" = "true" ]; then
+            echo "✔ PR already exists — skipping create."
+          else
+            echo "✔ New PR created: #${{ steps.pr.outputs.pr_number }}"
+          fi
+
+  # ----------------------------------------------------------
+  # 2️⃣ AUTO-MERGE PR INTO DEVELOP WHEN APPROVED
+  # ----------------------------------------------------------
+  auto-merge:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Enable Auto-Merge
+      - name: Get PR number
+        id: pr
         run: |
-          pr=${{ needs.create_pr.outputs.pr_number }}
-          echo "Enabling auto-merge for PR #$pr"
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
-          curl -s -X POST \
+      - name: Check if PR is approved
+        id: approval
+        run: |
+          PR=${{ steps.pr.outputs.pr_number }}
+          echo "Checking approvals for PR #$PR"
+
+          reviews=$(curl -s \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$pr/auto-merge \
-            -d "{\"merge_method\": \"merge\"}"
+            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews)
+
+          echo "Reviews JSON:"
+          echo "$reviews"
+
+          # If any approval exists → approved=true
+          if echo "$reviews" | grep -q '"state": "APPROVED"'; then
+            echo "approved=true" >> $GITHUB_OUTPUT
+          else
+            echo "approved=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if not approved
+        if: steps.approval.outputs.approved == 'false'
+        run: echo "❌ PR is NOT approved — waiting."
+
+      - name: Merge PR (squash)
+        if: steps.approval.outputs.approved == 'true'
+        run: |
+          PR=${{ steps.pr.outputs.pr_number }}
+          echo "Merging PR #$PR → develop"
+
+          merge_response=$(curl -s -X PUT \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
+            -d '{"merge_method": "squash"}')
+
+          echo "Merge Response:"
+          echo "$merge_response"
+
+          if echo "$merge_response" | grep -q '"merged": true'; then
+            echo "✔ Merge successful!"
+          else
+            echo "❌ Merge failed"
+            exit 1
