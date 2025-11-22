@@ -3,12 +3,15 @@ name: Auto PR + Auto Merge (Feature → Develop)
 on:
   push:
     branches:
-      - 'feature/**'     # Auto-create PR on feature pushes
+      - 'feature/**'
 
   pull_request:
-    types: [review_requested, submitted, edited, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, synchronize, edited, ready_for_review, review_requested, submitted]
     branches:
-      - develop           # Auto-merge PRs targeting develop
+      - develop
+
+  pull_request_review:
+    types: [submitted]   # triggers auto merge immediately after approval
 
 permissions:
   pull-requests: write
