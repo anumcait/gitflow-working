@@ -17,7 +17,7 @@ jobs:
   create_pr:
     runs-on: ubuntu-latest
     outputs:
-      pr_number: ${{ steps.create.outputs.pr }}
+      pr_number: ${{ steps.setpr.outputs.pr }}
 
     steps:
       - uses: actions/checkout@v4
@@ -26,24 +26,51 @@ jobs:
         id: vars
         run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create PR
-        id: create
+      - name: Create or Detect PR
+        id: setpr
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           BRANCH="${{ steps.vars.outputs.branch }}"
+          REPO="${{ github.repository }}"
 
-          echo "Creating PR: $BRANCH → $BASE_BRANCH"
+          echo "Trying to create PR for $BRANCH → $BASE_BRANCH"
 
-          result=$(curl -s -X POST \
+          # Try PR creation
+          create=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls \
+            https://api.github.com/repos/$REPO/pulls \
             -d "{\"title\": \"PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
 
-          echo "$result"
+          echo "Create response: $create"
 
-          PR=$(echo "$result" | jq -r '.number')
-          echo "pr=$PR" >> $GITHUB_OUTPUT
+          # If PR created successfully
+          number=$(echo "$create" | jq -r '.number')
+
+          if [ "$number" != "null" ]; then
+            echo "PR created: $number"
+            echo "pr=$number" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "PR creation failed. Checking if PR already exists..."
+
+          # Find existing PR
+          existing=$(curl -s \
+            -H "Authorization: token $TOKEN" \
+            "https://api.github.com/repos/$REPO/pulls?head=${{ github.repository_owner }}:$BRANCH&state=open")
+
+          echo "Existing search: $existing"
+
+          number=$(echo "$existing" | jq -r '.[0].number')
+
+          if [ "$number" = "null" ]; then
+            echo "❌ No PR exists for branch $BRANCH"
+            exit 1
+          fi
+
+          echo "Found existing PR: $number"
+          echo "pr=$number" >> $GITHUB_OUTPUT
 
   approve_and_merge:
     needs: create_pr
@@ -54,24 +81,26 @@ jobs:
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
+          REPO="${{ github.repository }}"
 
           echo "Auto-approving PR #$PR"
 
           curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews" \
+            "https://api.github.com/repos/$REPO/pulls/$PR/reviews" \
             -d '{"event":"APPROVE"}'
 
       - name: Merge PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
+          REPO="${{ github.repository }}"
 
           echo "Auto-merging PR #$PR"
 
           curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
+            "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
             -d '{"merge_method":"squash"}'
