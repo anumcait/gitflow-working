@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return jsonify({"message": "GitLab POC Running123"})
+    return jsonify({"message": "GitLab POC Running12345"})
 
 @app.route("/add", methods=["POST"])
 def add():
