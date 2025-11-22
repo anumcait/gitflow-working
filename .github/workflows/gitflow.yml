@@ -1,9 +1,9 @@
-name: GitFlow PR Automation
+name: Auto Merge Feature → Develop
 
 on:
   push:
     branches:
-      - feature/*
+      - "feature/*"
 
 permissions:
   contents: write
@@ -11,207 +11,87 @@ permissions:
 
 jobs:
 
-  # ------------------------------------------------
-  # 1) On Feature Push → Create PR → Approve → Merge to dev
-  # ------------------------------------------------
-  feature_to_dev:
+  auto_merge_feature_to_develop:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Install Python (for GitHub API triggers)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install requests
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Auto-create, approve, & merge PR (feature → dev)
+      - name: Create + Merge PR (feature → develop)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
+          FEATURE_BRANCH: ${{ github.ref_name }}
         run: |
-          python3 <<'EOF'
+          python3 << 'EOF'
           import os, requests, time
 
-          token = os.environ["GH_TOKEN"]
-          repo  = os.environ["REPO"]
-          branch = os.environ["BRANCH"]
+          token  = os.environ["GITHUB_TOKEN"]
+          repo   = os.environ["REPO"]
+          branch = os.environ["FEATURE_BRANCH"]
 
           headers = {
               "Authorization": f"Bearer {token}",
               "Accept": "application/vnd.github+json"
           }
 
-          # 1️⃣ Create PR feature → dev
-          pr_data = {
-              "title": f"Auto PR Feature → dev ({branch})",
+          # -------------------------------------------------
+          # 1️⃣ Create Pull Request: feature → develop
+          # -------------------------------------------------
+          pr_payload = {
+              "title": f"Auto Merge {branch} → develop",
               "head": branch,
               "base": "develop",
-              "body": "Automated PR created by GitHub Actions"
+              "body": "Automated PR created by GitHub Actions."
           }
 
           pr = requests.post(
               f"https://api.github.com/repos/{repo}/pulls",
-              json=pr_data, headers=headers
+              json=pr_payload,
+              headers=headers
           ).json()
 
-          pr_number = pr["number"]
-          print("PR created:", pr_number)
+          pr_number = pr.get("number")
+          print("PR CREATED:", pr)
 
-          # 2️⃣ Approve PR
-          approval = requests.post(
+          if not pr_number:
+              print("❌ Failed to create PR")
+              print(pr)
+              exit(1)
+
+          time.sleep(2)
+
+          # -------------------------------------------------
+          # 2️⃣ Auto-Approve PR
+          # -------------------------------------------------
+          approve = requests.post(
               f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
-              json={"event": "APPROVE"},
-              headers=headers
+              headers=headers,
+              json={"event": "APPROVE"}
           )
-          print("PR approved:", approval.status_code)
+          print("PR APPROVED:", approve.text)
 
-          # 3️⃣ Merge PR
+          time.sleep(2)
+
+          # -------------------------------------------------
+          # 3️⃣ Auto-Merge PR
+          # -------------------------------------------------
           merge = requests.put(
               f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
-              json={"merge_method": "merge"},
-              headers=headers
+              headers=headers,
+              json={"merge_method": "merge"}
           )
-          print("PR merged:", merge.status_code)
+          print("PR MERGED:", merge.text)
+
           EOF
-
-  # ------------------------------------------------
-  # 2) After dev updated → Create PR dev → preprod
-  # ------------------------------------------------
-  dev_to_preprod:
-    needs: feature_to_dev
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install requests
-        run: pip install requests
-
-      - name: Create PR dev → preprod
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          python3 <<'EOF'
-          import os, requests
-
-          token = os.environ["GH_TOKEN"]
-          repo  = os.environ["REPO"]
-
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json"
-          }
-
-          # Create PR dev → preprod
-          pr_data = {
-              "title": "Promote dev → preprod",
-              "head": "dev",
-              "base": "preprod",
-              "body": "Auto promotion pipeline"
-          }
-
-          pr = requests.post(
-              f"https://api.github.com/repos/{repo}/pulls",
-              json=pr_data, headers=headers
-          ).json()
-
-          print("Created PR:", pr)
-          EOF
-
-  # ------------------------------------------------
-  # 3) Preprod → wait X hours → Auto-merge → main
-  # ------------------------------------------------
-  preprod_to_main:
-    needs: dev_to_preprod
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Sleep for hold time
-        run: |
-          echo "Holding in preprod for 1 hour…"
-          sleep 60     # <-- change to 24h = 86400 seconds
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install requests
-        run: pip install requests
-
-      - name: Create, Approve & Merge PR preprod → main
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          python3 <<'EOF'
-          import os, requests
-
-            token = os.environ["GH_TOKEN"]
-            repo  = os.environ["REPO"]
-            
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json"
-            }
-            
-            # 1️⃣ Create PR preprod → main
-            pr_data = {
-                "title": "Promote preprod → main",
-                "head": "preprod",
-                "base": "main",
-                "body": "Auto promotion to production"
-            }
-            
-            r = requests.post(
-                f"https://api.github.com/repos/{repo}/pulls",
-                json=pr_data, headers=headers
-            )
-            
-            print("Raw PR response:", r.status_code, r.text)
-            
-            # Stop if PR creation failed
-            if r.status_code >= 300:
-                print("❌ Failed to create PR")
-                raise SystemExit(1)
-            
-            pr_json = r.json()
-            
-            if "number" not in pr_json:
-                print("❌ GitHub did NOT return PR number")
-                print("Returned JSON:", pr_json)
-                raise SystemExit(1)
-            
-            pr_number = pr_json["number"]
-            print("✔ Created PR:", pr_number)
-            
-            # 2️⃣ Approve PR
-            approval = requests.post(
-                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
-                json={"event": "APPROVE"},
-                headers=headers
-            )
-            
-            print("Approval response:", approval.status_code, approval.text)
-            
-            # 3️⃣ Merge PR
-            merge = requests.put(
-                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
-                json={"merge_method": "merge"},
-                headers=headers
-            )
-            
-            print("Merge response:", merge.status_code, merge.text)
-
