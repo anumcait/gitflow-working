@@ -9,9 +9,16 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  BASE_BRANCH: develop
+
 jobs:
-  auto_pr_merge:
+
+  create_pr:
     runs-on: ubuntu-latest
+    if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
+    outputs:
+      pr_number: ${{ steps.create.outputs.number }}
 
     steps:
       - uses: actions/checkout@v4
@@ -20,57 +27,54 @@ jobs:
         id: vars
         run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create PR (if not exists)
+      - name: Create PR
         id: create
         run: |
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          HEAD="${{ steps.vars.outputs.branch }}"
-          BASE="develop"
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          branch="${{ steps.vars.outputs.branch }}"
 
-          echo "Checking if PR already exists..."
+          echo "Creating PR: $branch → $BASE_BRANCH"
 
-          pr=$(curl -s \
+          result=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:${HEAD}&base=$BASE" \
-            | jq -r '.[0].number')
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{\"title\": \"PR: $branch → $BASE_BRANCH\", \"head\": \"$branch\", \"base\": \"$BASE_BRANCH\"}")
 
-          if [[ "$pr" == "null" ]]; then
-            echo "Creating PR..."
+          echo "$result"
+          pr=$(echo "$result" | jq -r '.number')
 
-            create=$(curl -s -X POST \
-              -H "Authorization: token $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/pulls \
-              -d "{\"title\": \"Auto PR $HEAD → $BASE\", \"head\": \"$HEAD\", \"base\": \"$BASE\"}")
+          echo "number=$pr" >> $GITHUB_OUTPUT
 
-            pr=$(echo "$create" | jq -r '.number')
-          fi
 
-          echo "PR found/created: $pr"
-          echo "pr_number=$pr" >> $GITHUB_OUTPUT
+  approve_and_merge:
+    runs-on: ubuntu-latest
+    needs: create_pr
+    if: ${{ needs.create_pr.outputs.pr_number != 'null' }}
+
+    steps:
+      - name: Approve PR
+        run: |
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
+
+          echo "Auto-approving PR #$PR"
+
+          curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews" \
+            -d '{"event":"APPROVE"}'
 
       - name: Merge PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR="${{ steps.create.outputs.pr_number }}"
-          REPO="${{ github.repository }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
 
-          echo "Merging PR #$PR..."
+          echo "Auto-merging PR #$PR"
 
           curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
             -d '{"merge_method":"squash"}'
-
-      - name: Delete feature branch
-        run: |
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          BRANCH="${{ steps.vars.outputs.branch }}"
-          REPO="${{ github.repository }}"
-
-          echo "Deleting branch $BRANCH..."
-
-          curl -s -X DELETE \
-            -H "Authorization: token $TOKEN" \
-            "https://api.github.com/repos/$REPO/git/refs/heads/$BRANCH"
