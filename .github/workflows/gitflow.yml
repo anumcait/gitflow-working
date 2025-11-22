@@ -88,7 +88,7 @@ jobs:
   # 2️⃣ AUTO-MERGE PR INTO DEVELOP WHEN APPROVED
   # ----------------------------------------------------------
   auto-merge:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
     runs-on: ubuntu-latest
 
     steps:
