@@ -3,14 +3,14 @@ name: GitFlow Automation (Feature → Develop)
 on:
   push:
     branches:
-      - "feature/*"
+      - "feature/*"        # Runs only on push to feature branches, NOT on branch creation
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+  GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}    # For PR CREATE + MERGE
 
 jobs:
 
@@ -36,20 +36,29 @@ jobs:
             || echo "PR_EXISTS")
 
           if [[ "$PR" == "PR_EXISTS" ]]; then
-            # Get existing PR number if already created
+            # Fetch existing PR number
             PR=$(gh pr list --head "$GITHUB_REF_NAME" --json number -q ".[0].number")
           fi
 
           echo "number=${PR##*/}" >> $GITHUB_OUTPUT
 
-      - name: Auto Approve PR
+      # -----------------------
+      # FIXED AND WORKING PART
+      # -----------------------
+      - name: Auto Approve PR (GitHub Actions bot)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}     # IMPORTANT!!!
         run: |
-          gh pr review ${{ steps.pr.outputs.number }} --approve
+          echo "Approving PR ${{ steps.pr.outputs.number }} using GitHub Actions bot"
+          gh pr review ${{ steps.pr.outputs.number }} --approve --repo $GITHUB_REPOSITORY
 
       - name: Auto Merge PR
         run: |
-          gh pr merge ${{ steps.pr.outputs.number }} --merge --delete-branch
+          gh pr merge ${{ steps.pr.outputs.number }} --merge --delete-branch --repo $GITHUB_REPOSITORY
 
+  # -------------------------------------
+  # PYTHON TEST STAGE (AFTER MERGE)
+  # -------------------------------------
   tests:
     name: Run Python Tests
     runs-on: ubuntu-latest
@@ -73,6 +82,9 @@ jobs:
         run: |
           pytest || exit 1
 
+  # -------------------------------------
+  # PYTHON BUILD STAGE
+  # -------------------------------------
   build:
     name: Build Python App
     runs-on: ubuntu-latest
@@ -102,6 +114,9 @@ jobs:
           name: python-build
           path: dist/*
 
+  # -------------------------------------
+  # FINAL STAGE
+  # -------------------------------------
   ready_for_release:
     name: Ready for Release Stage
     runs-on: ubuntu-latest
@@ -110,6 +125,7 @@ jobs:
     steps:
       - name: Summary
         run: |
-          echo "Feature merged → develop"
-          echo "Tests passed"
-          echo "Build generated"
+          echo "✨ Feature merged → develop"
+          echo "✔ Tests passed"
+          echo "✔ Build generated"
+          echo "🚀 Ready for release"
