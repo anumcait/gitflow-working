@@ -1,130 +1,84 @@
-name: Auto PR + Auto Merge:Feature → Develop
+name: Auto PR + Auto Merge (Feature → Develop)
 
 on:
   push:
     branches:
-      - "feature/**"
-  pull_request:
-    types: [submitted, edited, labeled, unlabeled, synchronize, reopened, ready_for_review, review_requested]
-    branches:
-      - develop
+      - "feature/**"     # Trigger only on feature branches
 
 permissions:
-  pull-requests: write
   contents: write
+  pull-requests: write
 
 jobs:
-  # -----------------------------------------------------------
-  # 1️⃣ Create PR from feature → develop
-  # -----------------------------------------------------------
-  create-pr:
-    if: github.event_name == 'push'
+
+  # ============================================================
+  # 1️⃣ CREATE PR FROM feature/* → develop
+  # ============================================================
+  create_pr:
     runs-on: ubuntu-latest
+
+    outputs:
+      pr_number: ${{ steps.get_pr.outputs.number }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract branch name
+      - name: Extract branch
         id: vars
-        run: |
-          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request (safe)
-        id: pr
+      - name: Create Pull Request
+        id: create
         run: |
           branch="${{ steps.vars.outputs.branch }}"
-          echo "Creating PR for $branch → develop"
-
-          payload=$(jq -n \
-            --arg title "Auto: Merge $branch into develop" \
-            --arg body "Automated PR created by GitHub Actions." \
-            --arg head "$branch" \
-            --arg base "develop" \
-            '{title: $title, body: $body, head: $head, base: $base}')
 
           response=$(curl -s -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            -d "$payload" \
-            https://api.github.com/repos/${{ github.repository }}/pulls)
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{
+              \"title\": \"Auto: Merge $branch → develop\",
+              \"body\": \"Automated PR created by GitHub Actions\",
+              \"head\": \"$branch\",
+              \"base\": \"develop\"
+            }")
 
-          echo "API Response: $response"
+          echo "$response" > response.json
 
-          if echo "$response" | grep -q "pull request already exists"; then
-            echo "existing_pr=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if echo "$response" | grep -q "\"status\": \"422\""; then
-            echo "existing_pr=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "existing_pr=false" >> $GITHUB_OUTPUT
-
-      - name: Print PR Status
+      - name: Extract PR number (new or existing)
+        id: get_pr
         run: |
-          if [ "${{ steps.pr.outputs.existing_pr }}" = "true" ]; then
-            echo "✔ PR already exists."
-          else
-            echo "✔ New PR created successfully!"
+          # 1. If new PR created → take `.number`
+          num=$(jq -r '.number // empty' response.json)
+
+          # 2. If PR already exists → search PR by branch head
+          if [ -z "$num" ]; then
+            num=$(curl -s \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }}/pulls \
+              | jq -r ".[] | select(.head.ref==\"${{ steps.vars.outputs.branch }}\") | .number")
           fi
 
-  # -----------------------------------------------------------
-  # 2️⃣ Auto Merge PR into develop if approved
-  # -----------------------------------------------------------
-  auto-merge:
-    if: github.event_name == 'pull_request'
+          echo "PR found: $num"
+          echo "number=$num" >> $GITHUB_OUTPUT
+
+
+  # ============================================================
+  # 2️⃣ AUTO-MERGE THE PR WHEN APPROVED
+  # ============================================================
+  auto_merge:
+    needs: create_pr
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get PR Info
-        id: pr
+      - name: Enable Auto-Merge
         run: |
-          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          pr=${{ needs.create_pr.outputs.pr_number }}
+          echo "Enabling auto-merge for PR #$pr"
 
-      - name: Check Approval Status
-        id: approval
-        run: |
-          PR=${{ steps.pr.outputs.pr_number }}
-
-          reviews=$(curl -s \
+          curl -s -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews)
-
-          echo "Reviews: $reviews"
-
-          if echo "$reviews" | grep -q '"state": "APPROVED"'; then
-            echo "approved=true" >> $GITHUB_OUTPUT
-          else
-            echo "approved=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Skip if not approved
-        if: steps.approval.outputs.approved == 'false'
-        run: |
-          echo "❌ PR not approved yet — cannot merge."
-          exit 0
-
-      - name: Merge PR
-        run: |
-          PR=${{ steps.pr.outputs.pr_number }}
-
-          echo "Merging PR #$PR into develop..."
-
-          response=$(curl -s -X PUT \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d '{"merge_method": "squash"}' \
-            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge)
-
-          echo "Merge Response: $response"
-
-          if echo "$response" | grep -q '"merged": true'; then
-            echo "✔ Successfully merged!"
-          else
-            echo "❌ Merge failed"
-            exit 1
-          fi
+            https://api.github.com/repos/${{ github.repository }}/pulls/$pr/auto-merge \
+            -d "{\"merge_method\": \"merge\"}"
