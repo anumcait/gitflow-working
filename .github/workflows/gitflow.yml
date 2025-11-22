@@ -15,38 +15,67 @@ env:
 jobs:
 
   create-pr:
-    runs-on: ubuntu-latest
+  if: github.event_name == 'push'
+  runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: Extract branch
-        id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+    - name: Extract branch name
+      id: vars
+      run: |
+        echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create PR
-        id: pr
-        run: |
-          branch="${{ steps.vars.outputs.branch }}"
+    - name: Create PR safely
+      id: pr
+      run: |
+        branch="${{ steps.vars.outputs.branch }}"
+        echo "Creating PR from $branch → develop"
 
-          response=$(curl -s -X POST \
-            -H "Authorization: token ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls \
-            -d "{
-              \"title\": \"Auto: Merge $branch into develop\",
-              \"body\": \"Automated PR\",
-              \"head\": \"$branch\",
-              \"base\": \"develop\"
-            }")
+        response=$(curl -s -X POST \
+          -H "Authorization: token ${{ secrets.PERSONAL_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/pulls \
+          -d "{
+            \"title\": \"Auto: Merge $branch into develop\",
+            \"body\": \"Automated PR by GitHub Actions\",
+            \"head\": \"$branch\",
+            \"base\": \"develop\"
+          }")
 
-          echo "$response"
+        echo "API Response: $response"
 
-          pr=$(echo "$response" | jq -r '.number // 0')
-          echo "pr_number=$pr" >> $GITHUB_OUTPUT
+        # Detect duplicate PR (string)
+        if echo "$response" | grep -q "pull request already exists"; then
+          echo "existing_pr=true" >> $GITHUB_OUTPUT
 
-      - name: Show PR
-        run: echo "PR #${{ steps.pr.outputs.pr_number }}"
+          # Look up existing PR number
+          prnum=$(curl -s \
+            -H "Authorization: token ${{ secrets.PERSONAL_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/pulls?state=open \
+            | jq -r ".[] | select(.head.ref == \"$branch\") | .number")
+
+          echo "pr_number=$prnum" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Extract new PR number
+        prnum=$(echo "$response" | jq -r '.number // empty')
+
+        if [ -z "$prnum" ]; then
+          echo "Failed to get PR number, skipping."
+          echo "existing_pr=true" >> $GITHUB_OUTPUT
+          echo "pr_number=0" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        echo "existing_pr=false" >> $GITHUB_OUTPUT
+        echo "pr_number=$prnum" >> $GITHUB_OUTPUT
+
+    - name: PR Status
+      run: |
+        echo "Existing PR: ${{ steps.pr.outputs.existing_pr }}"
+        echo "PR Number:  ${{ steps.pr.outputs.pr_number }}"
 
   auto-merge:
     needs: create-pr
