@@ -1,16 +1,25 @@
-name: Auto Merge Feature → Develop
+name: Auto PR + Auto Merge: Feature → Develop
 
 on:
   push:
     branches:
       - 'feature/**'     # runs only when pushing to feature branches
+  pull_request:
+    types: [submitted, edited, labeled, unlabeled, synchronize, reopened, ready_for_review, review_requested]
+    branches:
+      - develop          # auto-merge only on PRs targeting develop
 
 permissions:
   pull-requests: write
   contents: write
 
 jobs:
+
+  # ---------------------------------------------------------------
+  # 1️⃣ JOB: Create PR from feature → develop
+  # ---------------------------------------------------------------
   create-pr:
+    if: github.event_name == 'push'    # run only when feature branch is pushed
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +37,6 @@ jobs:
           branch="${{ steps.vars.outputs.branch }}"
           echo "Creating PR for $branch → develop"
 
-          # Create PR via GitHub API
           response=$(curl -s -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -42,16 +50,14 @@ jobs:
 
           echo "API Response: $response"
 
-          # Detect if PR already exists
+          # PR already exists
           if echo "$response" | grep -q "pull request already exists"; then
-            echo "PR already exists. Exiting gracefully."
             echo "existing_pr=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Detect GitHub 422 validation error
+          # GitHub validation error
           if echo "$response" | grep -q "\"status\": \"422\""; then
-            echo "Validation error (likely duplicate PR). Exiting gracefully."
             echo "existing_pr=true" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -64,4 +70,62 @@ jobs:
             echo "✔ PR already exists. Nothing to do."
           else
             echo "✔ New PR created successfully!"
+          fi
+
+  # ---------------------------------------------------------------
+  # 2️⃣ JOB: Auto-merge PR to develop once approved
+  # ---------------------------------------------------------------
+  auto-merge:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get PR info
+        id: pr
+        run: |
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Check approval status
+        id: approval
+        run: |
+          PR=${{ steps.pr.outputs.pr_number }}
+
+          reviews=$(curl -s \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews)
+
+          echo "Reviews: $reviews"
+
+          if echo "$reviews" | grep -q '"state": "APPROVED"'; then
+            echo "approved=true" >> $GITHUB_OUTPUT
+          else
+            echo "approved=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if not approved
+        if: steps.approval.outputs.approved == 'false'
+        run: |
+          echo "❌ PR not approved yet — cannot merge."
+          exit 0
+
+      - name: Merge PR into develop
+        run: |
+          PR=${{ steps.pr.outputs.pr_number }}
+
+          echo "Merging PR #$PR into develop..."
+
+          response=$(curl -s -X PUT \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge \
+            -d '{"merge_method": "squash"}')
+
+          echo "Merge Response: $response"
+
+          if echo "$response" | grep -q '"merged": true'; then
+            echo "✔ Successfully merged into develop!"
+          else
+            echo "❌ Merge failed"
+            exit 1
           fi
