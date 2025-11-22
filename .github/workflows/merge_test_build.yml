@@ -3,7 +3,7 @@ name: GitFlow PR Creator
 on:
   push:
     branches:
-      - feature**
+      - dev
 
 permissions:
   contents: write
