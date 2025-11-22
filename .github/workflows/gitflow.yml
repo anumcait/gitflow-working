@@ -91,16 +91,39 @@ jobs:
             "https://api.github.com/repos/$REPO/pulls/$PR/reviews" \
             -d '{"event":"APPROVE"}'
 
-      - name: Merge PR
+      - name: Merge PR (retry until mergeable)
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
           REPO="${{ github.repository }}"
 
-          echo "Auto-merging PR #$PR"
+          echo "Checking mergeability for PR #$PR..."
 
-          curl -s -X PUT \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
-            -d '{"merge_method":"squash"}'
+          for i in {1..10}; do
+            status=$(curl -s \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/pulls/$PR" \
+              | jq -r '.mergeable_state')
+
+            echo "Attempt $i: mergeable_state=$status"
+
+            if [[ "$status" == "clean" || "$status" == "unstable" ]]; then
+              echo "PR is mergeable. Merging..."
+
+              merge=$(curl -s -X PUT \
+                -H "Authorization: token $TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/pulls/$PR/merge" \
+                -d '{"merge_method":"squash"}')
+
+              echo "$merge"
+              exit 0
+            fi
+
+            echo "Not mergeable yet. Waiting 3 seconds..."
+            sleep 3
+          done
+
+          echo "❌ PR never became mergeable."
+          exit 1
