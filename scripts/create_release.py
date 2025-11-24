@@ -5,7 +5,11 @@ create_release_github.py
 Usage:
   python3 create_release_github.py --source develop --version v1.2.3
 """
-import os, time, argparse, requests, sys
+import os
+import time
+import argparse
+import requests
+import sys
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REPO = os.getenv("GITHUB_REPOSITORY")  # owner/repo
