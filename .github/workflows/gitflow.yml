@@ -61,8 +61,8 @@ jobs:
             git push
           fi
 
-      - name: Mypy (type checking)
-        run: mypy .
+      - name: Run mypy
+        run: mypy --config-file mypy.ini .
 
       - name: Pylint (style + code quality)
         run: |
