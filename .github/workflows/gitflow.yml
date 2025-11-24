@@ -77,7 +77,7 @@ jobs:
           pytest -q --disable-warnings --maxfail=1
 
       - name: Bandit (security static analysis)
-        run: bandit -r .
+        run: bandit -r . -c .bandit
 
       - name: pip-audit (known vulnerabilities)
         run: pip-audit || true
