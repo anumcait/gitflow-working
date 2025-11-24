@@ -84,8 +84,10 @@ jobs:
 
       - name: Secret scanning (basic)
         run: |
-          if grep -R "API_KEY\|SECRET\|TOKEN\|PASSWORD" -n .; then
-            echo "⚠️ Possible secret detected!"
+          if grep -R --exclude-dir={.git,.github,.mypy_cache,__pycache__} \
+              -n "API_KEY\|SECRET_KEY\|ACCESS_KEY\|PRIVATE_KEY\|PASSWORD=" .; then
+            echo "⚠️ Secret detected!"
+            exit 1
           else
             echo "No secrets found."
           fi
