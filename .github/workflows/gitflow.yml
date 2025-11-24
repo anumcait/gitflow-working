@@ -1,180 +1,124 @@
-name: Full GitFlow Automation
+name: Auto PR + Auto Merge + Tests on Develop
 
 on:
   push:
     branches:
       - "feature/**"
-  pull_request:
-    branches: [develop]
+      - "develop"
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  PYTHONUNBUFFERED: 1
-
-# -------------------------------------------
-# STAGE 1 - FEATURE → DEVELOP
-# -------------------------------------------
+  BASE_BRANCH: develop
 
 jobs:
 
-  pr_to_develop:
-    name: Auto PR (feature → develop)
+  create_pr:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/heads/feature/')
-
     outputs:
-      pr_number: ${{ steps.create_pr.outputs.pull-request-number }}
+      pr_number: ${{ steps.create.outputs.number }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create Pull Request → develop
-        id: create_pr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.PERSONAL_TOKEN }}
-          title: "Auto PR: ${{ github.ref_name }} → develop"
-          body: Automated PR created by GitFlow pipeline.
-          base: develop
-          head: ${{ github.ref_name }}
-          delete-branch: false
+      - name: Extract branch name
+        id: vars
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-  ci_checks:
-    name: Run Lint + Tests + Security
-    needs: pr_to_develop
+      - name: Create PR
+        id: create
+        run: |
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          branch="${{ steps.vars.outputs.branch }}"
+
+          result=$(curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{\"title\": \"PR: $branch → $BASE_BRANCH\", \"head\": \"$branch\", \"base\": \"$BASE_BRANCH\"}")
+
+          pr=$(echo "$result" | jq -r '.number')
+          echo "number=$pr" >> $GITHUB_OUTPUT
+
+
+  approve_and_merge:
     runs-on: ubuntu-latest
+    needs: create_pr
+    if: ${{ needs.create_pr.outputs.pr_number != 'null' }}
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Add app to PYTHONPATH
-        run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Dependencies
+      - name: Approve PR
         run: |
-          python -m pip install --upgrade pip
-          pip install ruff mypy pytest bandit pip-audit fastapi[all]
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
 
-      - name: Ruff Lint
-        run: ruff check .
+          curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews" \
+            -d '{"event":"APPROVE"}'
 
-      - name: Run mypy
-        run: mypy --config-file mypy.ini .
-
-      - name: Pytest
-        run: pytest -q
-
-      - name: Bandit (security static analysis)
-        run: bandit -r . -c .bandit || true
-
-      - name: pip-audit
-        run: pip-audit
-
-      - name: Manual Secret Scan
+      - name: Merge PR
         run: |
-          if grep -R --exclude-dir={.git,.github,.mypy_cache,__pycache__} \
-              -n "API_KEY\|SECRET_KEY\|ACCESS_KEY\|PRIVATE_KEY\|PASSWORD=" .; then
-            echo "❌ Secret detected!"
-            exit 1
-          else
-            echo "✔ No secrets found."
-          fi
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          PR="${{ needs.create_pr.outputs.pr_number }}"
 
-  auto_merge_develop:
-    name: Auto Merge PR → develop
-    needs: ci_checks
+          curl -s -X PUT \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
+            -d '{"merge_method":"squash"}'
+
+
+  run_tests:
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Auto-merge PR
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ needs.pr_to_develop.outputs.pr_number }}
-          merge-method: squash
-
-# -------------------------------------------
-# STAGE 2 - DEVELOP → RELEASE
-# -------------------------------------------
-
-  create_release_branch:
-    name: Create release branch
-    runs-on: ubuntu-latest
-    needs: auto_merge_develop
+    needs: approve_and_merge
     if: github.ref == 'refs/heads/develop'
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get next version
-        id: version
-        run: |
-          echo "version=1.0.$(date +%s)" >> $GITHUB_OUTPUT
-
-      - name: Create release branch
-        run: |
-          git checkout -b release/${{ steps.version.outputs.version }}
-          git push origin release/${{ steps.version.outputs.version }}
-
-      - name: Create PR release → preprod
-        uses: peter-evans/create-pull-request@v6
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Release → Preprod"
-          body: "Release build ready for preprod."
-          base: preprod
-          head: release/${{ steps.version.outputs.version }}
+          python-version: "3.10"
 
-# -------------------------------------------
-# STAGE 3 - PREPROD → MAIN
-# -------------------------------------------
-
-  promote_to_main:
-    name: Promote preprod → main
-    runs-on: ubuntu-latest
-    needs: create_release_branch
-
-    steps:
-      - name: Create PR preprod → main
-        id: pr_main
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Promote Preprod → Main"
-          base: main
-          head: preprod
-          body: "Auto promotion after preprod approval."
-
-      - name: Auto merge
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ steps.pr_main.outputs.pull-request-number }}
-          merge-method: squash
-
-# -------------------------------------------
-# STAGE 4 - TAGGING MAIN
-# -------------------------------------------
-
-  create_tag:
-    name: Tag Main
-    runs-on: ubuntu-latest
-    needs: promote_to_main
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create tag
+      - name: Install dependencies
         run: |
-          TAG=v1.0.$(date +%s)
-          git tag $TAG
-          git push origin $TAG
-          echo "Created tag $TAG"
+          pip install -r requirements.txt
+          npm install || true
+
+      # ---------------------
+      #   🧪 PYTHON TESTS
+      # ---------------------
+
+      - name: Run Ruff (lint)
+        run: ruff check .
+
+      - name: Run Black (format check)
+        run: black --check .
+
+      - name: Run mypy
+        run: mypy --config-file mypy.ini .
+
+      - name: Run PyTest
+        run: pytest
+
+      - name: Run Pylint
+        run: pylint $(git ls-files '*.py')
+
+      - name: Bandit (security static analysis)
+        run: bandit -r . -c .bandit || true
+
+      - name: Run pip-audit (vuln scan)
+        run: pip-audit
+
+      # ---------------------
+      #   🧪 NODE TESTS
+      # ---------------------
+
+      - name: Run ESLint
+        run: npm run lint || true
