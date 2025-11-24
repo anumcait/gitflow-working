@@ -50,8 +50,16 @@ jobs:
           pip install -r requirements.txt
           pip install ruff mypy pylint bandit pip-audit
 
-      - name: Ruff (fast Python linter)
-        run: ruff check .
+      - name: Ruff Fix (auto fix and commit)
+        run: |
+          ruff check . --fix
+          if [[ `git status --porcelain` ]]; then
+            git config --global user.name "github-actions"
+            git config --global user.email "actions@github.com"
+            git add .
+            git commit -m "Auto-fix Ruff issues"
+            git push
+          fi
 
       - name: Mypy (type checking)
         run: mypy .
