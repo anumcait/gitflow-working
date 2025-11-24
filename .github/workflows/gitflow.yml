@@ -1,10 +1,11 @@
-name: Auto PR + Auto Merge + CI
+name: GitFlow + Auto PR + CI
 
 on:
   push:
     branches:
-      - "feature/**"      # ONLY auto PR + merge
-      - "develop"         # ONLY CI
+      - "feature/**"
+      - "develop"
+  pull_request:
 
 permissions:
   contents: write
@@ -14,73 +15,67 @@ env:
   BASE_BRANCH: develop
 
 
-# ---------------------------------------------------------
-# 1️⃣ AUTO PR + AUTO MERGE (ONLY FOR feature/**)
-# ---------------------------------------------------------
+###########################################################
+# 1️⃣ AUTO PR + AUTO MERGE (feature → develop)
+###########################################################
+
 jobs:
 
-  create_pr:
-    if: startsWith(github.ref, 'refs/heads/feature/')
+  auto_pr:
+    name: Auto PR Creation
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/heads/feature/')
     outputs:
       pr_number: ${{ steps.create.outputs.number }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract branch
+      - name: Extract branch name
         id: vars
         run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
-      - name: Create PR
+      - name: Create or Reuse PR
         id: create
         run: |
-          TOKEN="***"
-BRANCH="feature/login"
+          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
+          BRANCH="${{ steps.vars.outputs.branch }}"
 
-echo "Checking if PR already exists: $BRANCH → $BASE_BRANCH"
+          echo "Checking if PR already exists..."
 
-# 1️⃣ Check for existing PR
-existing=$(curl -s \
-  -H "Authorization: token $TOKEN" \
-  "https://api.github.com/repos/anumcait/gitflow-working/pulls?state=open&head=anumcait:$BRANCH&base=$BASE_BRANCH")
+          EXISTING=$(curl -s -H "Authorization: token $TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:$BRANCH&base=$BASE_BRANCH" \
+            | jq -r '.[0].number')
 
-pr=$(echo "$existing" | jq -r '.[0].number')
+          if [[ "$EXISTING" != "null" ]]; then
+            echo "PR already exists → #$EXISTING"
+            echo "number=$EXISTING" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-if [[ "$pr" != "null" ]]; then
-  echo "PR already exists: #$pr"
-  echo "number=$pr" >> $GITHUB_OUTPUT
-  exit 0
-fi
+          echo "Creating new PR: $BRANCH → $BASE_BRANCH"
 
-echo "No existing PR. Creating new PR..."
+          CREATE=$(curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{\"title\": \"PR: $BRANCH → $BASE_BRANCH\", \"head\": \"$BRANCH\", \"base\": \"$BASE_BRANCH\"}")
 
-# 2️⃣ Create PR
-result=$(curl -s -X POST \
-  -H "Authorization: token $TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/anumcait/gitflow-working/pulls \
-  -d "{\"title\":\"PR: $BRANCH → $BASE_BRANCH\",\"head\":\"$BRANCH\",\"base\":\"$BASE_BRANCH\"}")
-
-echo "$result"
-
-pr=$(echo "$result" | jq -r '.number')
-echo "number=$pr" >> $GITHUB_OUTPUT
+          echo "$CREATE"
+          echo "number=$(echo "$CREATE" | jq -r '.number')" >> $GITHUB_OUTPUT
 
 
-  approve_and_merge:
-    if: startsWith(github.ref, 'refs/heads/feature/') && needs.create_pr.outputs.pr_number != 'null'
+  auto_approve_and_merge:
+    name: Auto Approve & Merge
     runs-on: ubuntu-latest
-    needs: create_pr
+    needs: auto_pr
+    if: ${{ needs.auto_pr.outputs.pr_number != 'null' }}
 
     steps:
-      - name: Wait for mergeability
-        run: sleep 5
-
       - name: Approve PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR=${{ needs.create_pr.outputs.pr_number }}
+          PR="${{ needs.auto_pr.outputs.pr_number }}"
 
           echo "Approving PR #$PR"
 
@@ -93,7 +88,7 @@ echo "number=$pr" >> $GITHUB_OUTPUT
       - name: Merge PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR=${{ needs.create_pr.outputs.pr_number }}
+          PR="${{ needs.auto_pr.outputs.pr_number }}"
 
           echo "Merging PR #$PR"
 
@@ -104,38 +99,75 @@ echo "number=$pr" >> $GITHUB_OUTPUT
             -d '{"merge_method":"squash"}'
 
 
-# ---------------------------------------------------------
-# 2️⃣ CI JOB (ONLY WHEN DEVELOP GETS NEW COMMIT)
-# ---------------------------------------------------------
-  run_ci:
-    if: github.ref == 'refs/heads/develop'
+###########################################################
+# 2️⃣ CI PIPELINE (Runs on PR + develop merge)
+###########################################################
+
+  ci_pipeline:
+    name: Lint + Tests + Security
     runs-on: ubuntu-latest
+    needs: auto_approve_and_merge
+
+    if: >
+      startsWith(github.ref, 'refs/heads/develop') ||
+      github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python deps
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
-          pip install -r requirements.txt || true
-          pip install pytest flake8 mypy ruff pylint bandit pip-audit || true
+          pip install -r requirements.txt
+          pip install black ruff mypy pylint bandit pip-audit
 
-      - name: pytest
-        run: pytest || true
+      - name: Black Auto-format
+        run: |
+          black .
+          if [[ `git status --porcelain` ]]; then
+            git config --global user.name "github-actions"
+            git config --global user.email "actions@github.com"
+            git add .
+            git commit -m "Black auto-format"
+            git push
+          fi
 
-      - name: flake8
-        run: flake8 . || true
+      - name: Ruff Fix
+        run: |
+          ruff check . --fix
+          if [[ `git status --porcelain` ]]; then
+            git config --global user.name "github-actions"
+            git config --global user.email "actions@github.com"
+            git add .
+            git commit -m "Ruff fixes"
+            git push
+          fi
 
-      - name: mypy
-        run: mypy . || true
+      - name: Run mypy
+        run: mypy --config-file mypy.ini .
 
-      - name: ruff
-        run: ruff check . || true
-
-      - name: pylint
+      - name: Run pylint
         run: pylint $(git ls-files '*.py') || true
 
-      - name: bandit
-        run: bandit -r . || true
+      - name: Run pytest
+        run: |
+          export PYTHONPATH="${{ github.workspace }}"
+          pytest -q --disable-warnings --maxfail=1
 
-      - name: pip-audit
+      - name: Bandit security scan
+        run: bandit -r . -c .bandit || true
+
+      - name: pip-audit vulnerabilities
         run: pip-audit || true
+
+      - name: Secret scanning
+        run: |
+          if grep -R "API_KEY\|SECRET_KEY\|PASSWORD=" -n .; then
+            echo "Secret detected!"
+            exit 1
+          else
+            echo "No secrets found."
+          fi
