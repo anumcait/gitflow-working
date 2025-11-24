@@ -1,49 +1,73 @@
-name: GitFlow PR Creator
+name: Develop Branch CI
 
 on:
   push:
     branches:
-      - dev
+      - develop
 
 permissions:
-  contents: write
-  pull-requests: write
-
-env:
-  TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+  contents: read
 
 jobs:
-  create_pr:
+  run_tests:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create release branch
-        run: |
-          DATE=$(date +'%Y.%m.%d.%H%M%S')
-          BR=release/$DATE
-          git checkout -b $BR
-          git push https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git HEAD:$BR
-          echo "BRANCH=$BR" >> $GITHUB_ENV
+      # Python setup
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Create PR
-        id: pr
+      - name: Install Python dependencies
         run: |
-          PR=$(gh api repos/${GITHUB_REPOSITORY}/pulls \
-          -f title="Promote $BRANCH to develop" \
-          -f head="$BRANCH" \
-          -f base="develop" \
-          -H "Authorization: Bearer $TOKEN" \
-          --jq ".number")
+          pip install -r requirements.txt
+          pip install ruff mypy bandit pylint pytest pip-audit
 
-          echo "pr_number=$PR" >> $GITHUB_OUTPUT
+      # JS setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-      - name: Trigger second workflow (merge → test → build)
+      - name: Install JS dependencies
+        if: hashFiles('package.json') != ''
+        run: npm install
+
+      # --------- PYTHON CHECKS -----------
+
+      - name: Ruff (Python linter)
+        run: ruff check .
+
+      - name: Bandit security scan
         run: |
-          curl -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: token $TOKEN" \
-          https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches \
-          -d '{"event_type":"merge_pr","client_payload":{"pr": "'"${{ steps.pr.outputs.pr_number }}"'"}}'
+          bandit -r .
+        continue-on-error: false
+
+      - name: Mypy type check
+        run: mypy .
+
+      - name: Pylint
+        run: |
+          pylint $(git ls-files '*.py')
+
+      - name: Pytest
+        run: pytest
+
+      - name: Pip Audit
+        run: pip-audit
+
+      # --------- JS CHECKS -------------
+
+      - name: ESLint
+        if: hashFiles('package.json') != ''
+        run: npx eslint .
+
+      - name: Secret Scan
+        uses: trufflesecurity/trufflehog@v3.81.0
+        with:
+          path: .
+          json: false
