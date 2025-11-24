@@ -19,11 +19,11 @@ def add():
 
 
 @app.route("/subtract", methods=["POST"])
-def add():
+def subtract():
     data = request.json
     a = data.get("a")
     b = data.get("b")
-    return jsonify({"result": subtract_numbers(a, b)})
+    return {"result": a - b}
 
 
 if __name__ == "__main__":
