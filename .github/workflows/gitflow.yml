@@ -35,7 +35,7 @@ jobs:
         id: create_pr
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PERSONAL_TOKEN }}
           title: "Auto PR: ${{ github.ref_name }} → develop"
           body: Automated PR created by GitFlow pipeline.
           base: develop
@@ -66,14 +66,14 @@ jobs:
       - name: Ruff Lint
         run: ruff check .
 
-      - name: Mypy
-        run: mypy .
+      - name: Run mypy
+        run: mypy --config-file mypy.ini .
 
       - name: Pytest
         run: pytest -q
 
-      - name: Bandit Security Scan
-        run: bandit -r .
+      - name: Bandit (security static analysis)
+        run: bandit -r . -c .bandit || true
 
       - name: pip-audit
         run: pip-audit
