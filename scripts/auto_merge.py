@@ -15,10 +15,17 @@ if not REPO:
     print("ERROR: GITHUB_REPOSITORY env must be set (owner/repo).")
     sys.exit(1)
 API_BASE = f"https://api.github.com/repos/{REPO}"
-HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+HEADERS = {
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
+}
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--action", required=True, choices=["feature_to_develop", "promote_release", "hotfix_to_main_and_dev"])
+parser.add_argument(
+    "--action",
+    required=True,
+    choices=["feature_to_develop", "promote_release", "hotfix_to_main_and_dev"],
+)
 parser.add_argument("--branch", required=True)
 parser.add_argument("--hold-hours", type=float, default=0)
 parser.add_argument("--tag-version", type=str, default=None)
@@ -27,9 +34,10 @@ args = parser.parse_args()
 MAX_RETRIES = 8
 RETRY_INTERVAL = 15  # seconds
 
+
 def get_open_pr(source, target):
     # GitHub: filter by head (owner:branch)
-    owner = REPO.split('/')[0]
+    owner = REPO.split("/")[0]
     head = f"{owner}:{source}"
     url = f"{API_BASE}/pulls?state=open&head={head}&base={target}"
     r = requests.get(url, headers=HEADERS)
@@ -37,8 +45,14 @@ def get_open_pr(source, target):
         return r.json()[0]
     return None
 
+
 def create_pr(source, target, title=None, body=None):
-    payload = {"head": source, "base": target, "title": title or f"Auto PR: {source} → {target}", "body": body or ""}
+    payload = {
+        "head": source,
+        "base": target,
+        "title": title or f"Auto PR: {source} → {target}",
+        "body": body or "",
+    }
     url = f"{API_BASE}/pulls"
     r = requests.post(url, headers=HEADERS, json=payload)
     if r.ok:
@@ -48,10 +62,12 @@ def create_pr(source, target, title=None, body=None):
     print(f"[ERROR] Create PR failed: {r.status_code} {r.text}")
     return None
 
+
 def get_pr(number):
     url = f"{API_BASE}/pulls/{number}"
     r = requests.get(url, headers=HEADERS)
     return r.json() if r.ok else None
+
 
 def try_merge_pr(number):
     pr = get_pr(number)
@@ -76,11 +92,13 @@ def try_merge_pr(number):
     print(f"[WARN] Merge attempt failed: {r.status_code} {r.text}")
     return False
 
+
 def create_ref(branch, sha):
     url = f"{API_BASE}/git/refs"
     payload = {"ref": f"refs/heads/{branch}", "sha": sha}
     r = requests.post(url, headers=HEADERS, json=payload)
     return r.ok
+
 
 def get_ref_sha(branch):
     url = f"{API_BASE}/git/ref/heads/{branch}"
@@ -94,11 +112,13 @@ def get_ref_sha(branch):
         return r.json()["object"]["sha"]
     return None
 
+
 def tag_release(branch, version):
     # create tag referencing latest commit of branch
     sha = get_ref_sha(branch)
     if not sha:
-        print("[ERROR] Cannot get sha for branch", branch); return False
+        print("[ERROR] Cannot get sha for branch", branch)
+        return False
     url = f"{API_BASE}/git/refs"
     payload = {"ref": f"refs/tags/{version}", "sha": sha}
     r = requests.post(url, headers=HEADERS, json=payload)
@@ -107,6 +127,7 @@ def tag_release(branch, version):
         return True
     print(f"[ERROR] Tag creation failed: {r.status_code} {r.text}")
     return False
+
 
 def ensure_pr_and_merge(source, target, create_if_missing=True, tag_version=None):
     pr = get_open_pr(source, target)
@@ -125,6 +146,7 @@ def ensure_pr_and_merge(source, target, create_if_missing=True, tag_version=None
         time.sleep(RETRY_INTERVAL)
     print("❌ Failed to auto-merge after retries")
     return False
+
 
 def main():
     action = args.action
@@ -156,8 +178,11 @@ def main():
             ensure_pr_and_merge(src, "develop")
         return
 
+
 if __name__ == "__main__":
     if not GITHUB_TOKEN:
-        print("ERROR: GITHUB_TOKEN not set in env. Provide a personal token as secret if needed.")
+        print(
+            "ERROR: GITHUB_TOKEN not set in env. Provide a personal token as secret if needed."
+        )
         sys.exit(1)
     main()
