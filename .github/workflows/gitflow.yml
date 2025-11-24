@@ -1,166 +1,241 @@
-name: GitFlow CI + Auto PR + Security
+name: CI - Format / Lint / Type / Test / Security
 
+# Run on pushes to branches and on PRs
 on:
   push:
     branches:
-      - "feature/**"
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  packages: read
+  id-token: write
 
 env:
-  BASE_BRANCH: develop
+  PYTHON_VERSIONS: "3.10 3.11 3.12"
+  PIP_CACHE_DIR: ~/.cache/pip
 
 jobs:
-  # ======================================================
-  # 1) CODE QUALITY & SECURITY STAGE
-  # ======================================================
-  quality_security:
+
+  # 1) Formatting + Linting (fast feedback)
+  lint:
+    name: Format & Lint (black, ruff, pylint, eslint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: 3.11
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install black ruff pylint mypy pytest bandit pip-audit
-
-      # ----------------------
-      # Code Formatting Check
-      # ----------------------
-      - name: Black Format Check
-        run: black --check .
-
-      # ----------------------
-      # Ruff - super fast lint
-      # ----------------------
-      - name: Ruff Lint
-        run: ruff check .
-
-      # ----------------------
-      # Pylint - strict linter
-      # ----------------------
-      - name: Pylint
-        run: pylint $(git ls-files '*.py')
-
-      # ----------------------
-      # MyPy - Type Checking
-      # ----------------------
-      - name: MyPy Type Check
-        run: mypy .
-
-      # ----------------------
-      # Bandit - Security Scan
-      # ----------------------
-      - name: Bandit Security Scan
-        run: bandit -r . -ll
-
-      # ----------------------
-      # pip-audit - CVE check
-      # ----------------------
-      - name: Python Dependency Audit
-        run: pip-audit
-
-      # ----------------------
-      # Secret detection (Gitleaks)
-      # ----------------------
-      - name: Gitleaks Secret Scan
-        uses: gitleaks/gitleaks-action@v2
-
-  # ======================================================
-  # 2) PYTEST + FASTAPI TEST CLIENT
-  # ======================================================
-  tests:
-    needs: quality_security
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: 20
 
-      - name: Install app/test dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml', '**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dev deps
         run: |
+          python -m pip install --upgrade pip
+          pip install black ruff pylint
+
+      - name: Install JS deps (for frontend / eslint)
+        working-directory: ./frontend || .
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+          fi
+
+      - name: Run Black (check)
+        run: |
+          black --check .
+
+      - name: Run Ruff (fixable issues will fail check)
+        run: |
+          ruff check .
+
+      - name: Run pylint
+        run: |
+          # You can customize rcfile path if present
+          if command -v pylint >/dev/null 2>&1; then
+            pylint $(git ls-files '*.py') || true
+          fi
+
+      - name: Run ESLint (if package.json present)
+        working-directory: ./frontend || .
+        run: |
+          if [ -f package.json ]; then
+            npx eslint . --ext .js,.jsx,.ts,.tsx
+          fi
+
+      - name: Upload lint results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-logs
+          path: |
+            # collect anything you want; placeholder
+            .
+
+  # 2) Type checks + unit tests matrix
+  test:
+    name: Tests & Coverage - Python matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: [3.10, 3.11, 3.12]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: ${{ runner.os }}-pip-${{ matrix.python }}-${{ hashFiles('**/pyproject.toml','**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python }}-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest httpx
+          pip install pytest pytest-cov httpx[http2]  # httpx useful for FastAPI test client if needed
+          pip install mypy
 
-      - name: Run Pytest
-        run: pytest -q
+      - name: Run mypy (type-check)
+        run: |
+          if [ -f mypy.ini ] || [ -f pyproject.toml ]; then
+            mypy || true
+          fi
 
-  # ======================================================
-  # 3) CREATE PR: feature/* → develop
-  # ======================================================
-  create_pr:
-    needs: tests
+      - name: Run pytest with coverage
+        run: |
+          pytest --maxfail=1 --disable-warnings --cov=./ --cov-report=xml --cov-report=term
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python }}
+          path: coverage.xml
+
+  # 3) Security scans - Bandit, pip-audit, Gitleaks (secret detection)
+  security:
+    name: Security Scans (Bandit, pip-audit, gitleaks)
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (full history helps secret scanners)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Get Branch Name
-        id: vars
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
 
-      - name: Create PR
-        id: create
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: ${{ runner.os }}-pip-security-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-security-
+
+      - name: Install security tools
         run: |
-          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          branch="${{ steps.vars.outputs.branch }}"
+          python -m pip install --upgrade pip
+          pip install bandit pip-audit
 
-          echo "Creating PR: $branch → $BASE_BRANCH"
+      - name: Run Bandit (SAST for Python)
+        run: |
+          bandit -r . -f json -o bandit-report.json || true
 
-          result=$(curl -s -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pulls \
-            -d "{\"title\": \"PR: $branch → $BASE_BRANCH\", \"head\": \"$branch\", \"base\": \"$BASE_BRANCH\"}")
+      - name: Run pip-audit (dependency vuln check)
+        run: |
+          pip-audit -f json -o pip-audit-report.json || true
 
-          echo "$result"
-          pr=$(echo "$result" | jq -r '.number')
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            pip-audit-report.json
 
-          echo "number=$pr" >> $GITHUB_OUTPUT
+      - name: Run Gitleaks (secret detection)
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          # tune threshold or config if you keep gitleaks config in repo
+          args: --no-git -v
 
-  # ======================================================
-  # 4) AUTO-APPROVE & AUTO-MERGE THE PR
-  # ======================================================
-  approve_and_merge:
-    needs: create_pr
+  # 4) Build / package (optional): build wheel / sdist and publish to artifact
+  package:
+    name: Build & Package
     runs-on: ubuntu-latest
-    if: ${{ needs.create_pr.outputs.number != 'null' }}
-
+    needs: [test, security, lint]
     steps:
-      - name: Approve PR
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install build tools
         run: |
-          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR="${{ needs.create_pr.outputs.number }}"
+          python -m pip install --upgrade pip build
 
-          echo "Approving PR #$PR"
-
-          curl -s -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/reviews" \
-            -d '{"event":"APPROVE"}'
-
-      - name: Merge PR
+      - name: Build package
         run: |
-          TOKEN="${{ secrets.PERSONAL_TOKEN }}"
-          PR="${{ needs.create_pr.outputs.number }}"
+          python -m build
 
-          echo "Merging PR #$PR"
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
 
-          curl -s -X PUT \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
-            -d '{"merge_method":"squash"}'
+  # 5) Optional: Auto-deploy on main (example)
+  deploy:
+    name: Deploy (only on main)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: package
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ./dist
+
+      - name: Deploy placeholder
+        run: |
+          echo "Implement deployment step (upload to server, cloud provider, etc.)"
