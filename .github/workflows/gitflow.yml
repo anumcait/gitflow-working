@@ -1,4 +1,4 @@
-name: Auto PR + Auto Merge + Tests on Develop
+name: Auto PR + Auto Merge + CI on Develop
 
 on:
   push:
@@ -12,12 +12,17 @@ permissions:
 
 env:
   BASE_BRANCH: develop
+  PYTHONUNBUFFERED: 1
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
 
+  # -------------------------------------------------------------
+  # 1️⃣  AUTO PR + AUTO MERGE (feature → develop)
+  # -------------------------------------------------------------
   create_pr:
-    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.create.outputs.number }}
 
@@ -34,26 +39,31 @@ jobs:
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           branch="${{ steps.vars.outputs.branch }}"
 
+          echo "Creating PR: $branch → $BASE_BRANCH"
+
           result=$(curl -s -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/pulls \
             -d "{\"title\": \"PR: $branch → $BASE_BRANCH\", \"head\": \"$branch\", \"base\": \"$BASE_BRANCH\"}")
 
+          echo "$result"
           pr=$(echo "$result" | jq -r '.number')
+
           echo "number=$pr" >> $GITHUB_OUTPUT
 
-
   approve_and_merge:
+    if: needs.create_pr.outputs.pr_number != 'null'
     runs-on: ubuntu-latest
     needs: create_pr
-    if: ${{ needs.create_pr.outputs.pr_number != 'null' }}
 
     steps:
       - name: Approve PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
+
+          echo "Approving PR #$PR"
 
           curl -s -X POST \
             -H "Authorization: token $TOKEN" \
@@ -66,59 +76,69 @@ jobs:
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR="${{ needs.create_pr.outputs.pr_number }}"
 
+          echo "Merging PR #$PR"
+
           curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/pulls/$PR/merge" \
             -d '{"merge_method":"squash"}'
 
-
-  run_tests:
-    runs-on: ubuntu-latest
-    needs: approve_and_merge
+  # -------------------------------------------------------------
+  # 2️⃣  RUN FULL TEST SUITE AFTER MERGE TO DEVELOP
+  # -------------------------------------------------------------
+  ci_on_develop:
     if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           pip install -r requirements.txt
-          npm install || true
+          pip install pytest flake8 mypy ruff pylint bandit pip-audit
 
-      # ---------------------
-      #   🧪 PYTHON TESTS
-      # ---------------------
+      # ✔ pytest
+      - name: Run pytest
+        run: pytest -q --disable-warnings --maxfail=1
 
-      - name: Run Ruff (lint)
-        run: ruff check .
+      # ✔ flake8
+      - name: flake8
+        run: flake8 .
 
-      - name: Run Black (format check)
-        run: black --check .
-
+      # ✔ mypy
       - name: Run mypy
         run: mypy --config-file mypy.ini .
 
-      - name: Run PyTest
-        run: pytest
+      # ✔ ruff
+      - name : ruff
+        run: ruff check .
 
-      - name: Run Pylint
+      # ✔ pylint
+      - name: pylint
         run: pylint $(git ls-files '*.py')
 
+      # ✔ bandit
       - name: Bandit (security static analysis)
         run: bandit -r . -c .bandit || true
 
-      - name: Run pip-audit (vuln scan)
+      # ✔ pip-audit
+      - name: pip-audit
         run: pip-audit
 
-      # ---------------------
-      #   🧪 NODE TESTS
-      # ---------------------
-
-      - name: Run ESLint
-        run: npm run lint || true
+      # ✔ Secret scan
+      - name: Secret scan
+        run: |
+          if grep -R --exclude-dir={.git,.github,.mypy_cache,__pycache__} \
+             -n "API_KEY\|SECRET_KEY\|ACCESS_KEY\|PRIVATE_KEY\|PASSWORD=" .; then
+            echo "⚠️ Secret detected!"
+            exit 1
+          else
+            echo "No secrets found."
+          fi
