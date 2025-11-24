@@ -3,7 +3,7 @@ name: CI + Auto PR/Merge feature -> develop
 on:
   push:
     branches:
-      - "**"
+      - feature/**
   pull_request:
 
 permissions:
@@ -118,10 +118,7 @@ jobs:
       - name: Merge develop into feature, keep feature on conflicts
         run: |
           git fetch origin $BASE_BRANCH
-          # --strategy-option ours => keep CURRENT branch (feature) when conflicts
-          git merge origin/$BASE_BRANCH \
-            --strategy=ort --strategy-option=ours \
-            -m "Merge $BASE_BRANCH into feature (keep feature on conflicts)"
+          git merge origin/$BASE_BRANCH --allow-unrelated-histories --strategy=ort --strategy-option=ours -m "Merge $BASE_BRANCH into feature (keep feature on conflicts)"
           git push origin HEAD
 
   create_pr:
