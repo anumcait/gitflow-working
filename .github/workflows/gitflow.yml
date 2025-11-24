@@ -6,15 +6,19 @@ on:
       - "**"
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
 
   auto_format:
     name: Auto-format with Black
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -23,23 +27,28 @@ jobs:
       - name: Install Black
         run: pip install black
 
-      - name: Run black and auto-commit
+      - name: Run Black and Auto-Commit
         run: |
           black .
           if [[ `git status --porcelain` ]]; then
-            git config --global user.name "github-actions"
-            git config --global user.email "actions@github.com"
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
             git add .
             git commit -m "Auto-format code using Black"
             git push
+          else
+            echo "No Black formatting changes."
           fi
 
   lint_and_test:
-    name: Lint + Tests + Security
+    name: Lint + Tests + Security + Fixes
     runs-on: ubuntu-latest
     needs: auto_format
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -48,36 +57,41 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install ruff mypy pylint bandit pip-audit
+          pip install ruff mypy pylint bandit pip-audit pytest
 
-      - name: Ruff Fix (auto fix and commit)
+      - name: Ruff Fix (auto fix + safe commit)
         run: |
-          ruff check . --fix
+          ruff check . --fix || true
           if [[ `git status --porcelain` ]]; then
-            git config --global user.name "github-actions"
-            git config --global user.email "actions@github.com"
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
             git add .
             git commit -m "Auto-fix Ruff issues"
             git push
+          else
+            echo "No Ruff fixes."
           fi
+
+      - name: Run Ruff (no fix, fail if real issue)
+        run: ruff check .
 
       - name: Run mypy
         run: mypy --config-file mypy.ini .
 
-      - name: Pylint (style + code quality)
+      - name: Run pylint
         run: |
           pylint $(git ls-files '*.py') || true
 
-      - name: Pytest
+      - name: Run tests (Pytest)
         run: pytest -q --disable-warnings --maxfail=1
 
-      - name: Bandit (security static analysis)
+      - name: Bandit (security scanner)
         run: bandit -r .
 
-      - name: pip-audit (known vulnerabilities)
+      - name: pip-audit (dependency vulnerabilities)
         run: pip-audit || true
 
-      - name: Secret scanning (basic)
+      - name: Basic Secret Scan
         run: |
           if grep -R "API_KEY\|SECRET\|TOKEN\|PASSWORD" -n .; then
             echo "⚠️ Possible secret detected!"
