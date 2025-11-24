@@ -50,6 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Add app to PYTHONPATH
+        run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
+
       - name: Install Python
         uses: actions/setup-python@v5
         with:
