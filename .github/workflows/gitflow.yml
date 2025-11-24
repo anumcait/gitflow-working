@@ -152,8 +152,8 @@ jobs:
         run: flake8 . || true   # prevent failure on stylistic issues
 
       # ✔ mypy
-      - name: mypy
-        run: mypy --ignore-missing-imports .
+      - name: Run mypy
+        run: mypy --config-file mypy.ini .
 
       # ✔ ruff
       - name: ruff
