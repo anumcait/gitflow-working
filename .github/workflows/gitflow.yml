@@ -3,8 +3,8 @@ name: Auto PR + Auto Merge + CI
 on:
   push:
     branches:
-      - "feature/**"      # Auto PR + Auto Merge only
-      - "develop"         # CI only (tests run here)
+      - "feature/**"      # ONLY auto PR + merge
+      - "develop"         # ONLY CI
 
 permissions:
   contents: write
@@ -13,11 +13,12 @@ permissions:
 env:
   BASE_BRANCH: develop
 
+
+# ---------------------------------------------------------
+# 1️⃣ AUTO PR + AUTO MERGE (ONLY FOR feature/**)
+# ---------------------------------------------------------
 jobs:
 
-  # ---------------------------------------------------------
-  # 1️⃣ AUTO PR + AUTO MERGE (ONLY for feature/** pushes)
-  # ---------------------------------------------------------
   create_pr:
     if: startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
@@ -27,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract branch name
+      - name: Extract branch
         id: vars
         run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
 
@@ -36,13 +37,15 @@ jobs:
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           BRANCH="${{ steps.vars.outputs.branch }}"
+
           echo "Creating PR: $BRANCH → $BASE_BRANCH"
 
+          # Create PR only if not exists
           result=$(curl -s -X POST \
-           -H "Authorization: token $TOKEN" \
-           -H "Accept: application/vnd.github+json" \
-           https://api.github.com/repos/${{ github.repository }}/pulls \
-           -d "{\"title\":\"PR: $BRANCH → $BASE_BRANCH\",\"head\":\"$BRANCH\",\"base\":\"$BASE_BRANCH\"}")
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "{\"title\":\"PR: $BRANCH → $BASE_BRANCH\",\"head\":\"$BRANCH\",\"base\":\"$BASE_BRANCH\"}")
 
           echo "$result"
           pr=$(echo "$result" | jq -r '.number')
@@ -55,10 +58,15 @@ jobs:
     needs: create_pr
 
     steps:
+      - name: Wait for mergeability
+        run: sleep 5
+
       - name: Approve PR
         run: |
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR=${{ needs.create_pr.outputs.pr_number }}
+
+          echo "Approving PR #$PR"
 
           curl -s -X POST \
             -H "Authorization: token $TOKEN" \
@@ -71,6 +79,8 @@ jobs:
           TOKEN="${{ secrets.PERSONAL_TOKEN }}"
           PR=${{ needs.create_pr.outputs.pr_number }}
 
+          echo "Merging PR #$PR"
+
           curl -s -X PUT \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -78,9 +88,9 @@ jobs:
             -d '{"merge_method":"squash"}'
 
 
-  # ---------------------------------------------------------
-  # 2️⃣ CI JOB (ONLY WHEN develop GETS UPDATED)
-  # ---------------------------------------------------------
+# ---------------------------------------------------------
+# 2️⃣ CI JOB (ONLY WHEN DEVELOP GETS NEW COMMIT)
+# ---------------------------------------------------------
   run_ci:
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
@@ -88,12 +98,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python Deps
+      - name: Install Python deps
         run: |
           pip install -r requirements.txt || true
           pip install pytest flake8 mypy ruff pylint bandit pip-audit || true
 
-      - name: Run pytest
+      - name: pytest
         run: pytest || true
 
       - name: flake8
