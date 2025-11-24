@@ -18,7 +18,7 @@ jobs:
   # -----------------------------
   # 1️⃣ Auto-format, Lint & Tests
   # -----------------------------
-  auto_format_and_test:
+  auto_format_and_tes:
     name: Auto-format + Lint + Tests
     runs-on: ubuntu-latest
 
