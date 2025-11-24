@@ -7,7 +7,11 @@ Usage:
   python3 auto_merge_github.py --action hotfix_to_main_and_dev --branch hotfix/1
   python3 auto_merge_github.py --action promote_release --branch release/2025.11.20.120000 --hold-hours 0.01 --tag-version v1.2.3
 """
-import os, time, argparse, requests, sys, json
+import os
+import time
+import argparse
+import requests
+import sys
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REPO = os.getenv("GITHUB_REPOSITORY")  # owner/repo

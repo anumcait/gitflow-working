@@ -7,7 +7,6 @@ def test_add_numbers():
 
 
 def test_add_numbers_error():
-    import pytest
 
     with pytest.raises(ValueError):
         add_numbers(None, 5)

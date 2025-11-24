@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request
 from service import add_numbers
-from service import subtract_numbers
 
 app = Flask(__name__)
 
